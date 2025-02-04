@@ -1,0 +1,16 @@
+[[codebooks]]
+name = 'AER'
+codebook_path = 'C:/Scripts/NMERFISH/codebooks/codebook_code_color2__ExtraAaron_8_6_blank.csv' ### 
+hyb_pattern = 'H([0-9]|1[0-6])_AER_set[0-9]'
+hyb_folders = [
+				'/data/07_22_2024__PFF_PTBP1',
+				]
+psf_file = 'C:/Scripts/NMERFISH/psfs/dic_psf_60X_cy5_Scope5.pkl'  ### Scope5 psf
+flat_field_tag = 'flat_field/Scope5_'
+output_folder = '//192.168.0.23/loquat1/Aaron/07_22_2024__PFF_PTBP1/MERFISH_Analysis_AER'
+
+# you can have multiple codebooks
+#[[codebooks]]
+#name = 'MER'
+#path = 'C:/Scripts/NMERFISH/codebooks/codebook_0_New_DCBB-300_MERFISH_encoding_2_21_2023' ### 
+
