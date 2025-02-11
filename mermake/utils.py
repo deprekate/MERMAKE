@@ -11,6 +11,12 @@ from sklearn.cluster import KMeans
 import numpy as np
 from sklearn.cluster import KMeans
 
+class Config:
+	def __init__(self, args):
+		self.args = args
+		self.some_data = 'foo'
+
+
 def find_two_means(values):
 	values = np.abs(values).reshape(-1, 1)  # Reshape for clustering
 	kmeans = KMeans(n_clusters=3, n_init="auto").fit(values)
@@ -20,15 +26,15 @@ def find_two_means(values):
 
 from scipy.spatial import KDTree
 def estimate_step_size(points):
-    points = np.array(points)
-    # Build a KD-tree for efficient nearest neighbor search
-    tree = KDTree(points)
-    # Find the distance to the nearest neighbor for each point
-    distances, _ = tree.query(points, k=2)  # k=2 because first result is the point itself
-    nearest_dists = distances[:, 1]  # Extract nearest neighbor distances (skip self-distance)
-    # Use the median to ignore outliers (or mode if step size is very regular)
-    step_size = np.median(nearest_dists)  # More robust than mean
-    return step_size
+	points = np.array(points)
+	# Build a KD-tree for efficient nearest neighbor search
+	tree = KDTree(points)
+	# Find the distance to the nearest neighbor for each point
+	distances, _ = tree.query(points, k=2)  # k=2 because first result is the point itself
+	nearest_dists = distances[:, 1]  # Extract nearest neighbor distances (skip self-distance)
+	# Use the median to ignore outliers (or mode if step size is very regular)
+	step_size = np.median(nearest_dists)  # More robust than mean
+	return step_size
 
 def points_to_coords(points):
 	'convert xy point locations to integer grid coordinates'
@@ -50,25 +56,6 @@ def get_xml_field(file, field):
 	xml = read_xml(file)
 	return xml.find(f".//{field}").text
 
-def get_xy(args):
-	group = args.config['codebooks'][0]
-	pattern = group['hyb_pattern']
-	files = list()
-	for folder in group['hyb_folders']:
-		#regex_path = os.path.join(folder, 'H([0-9]|1[0-6])_AER*', '*xml').replace('(','@(')
-		regex_path = os.path.join(folder, pattern, '*xml').replace('(','@(')
-		files.extend(wc.glob(regex_path, flags = wc.EXTGLOB))
-	counts = Counter(re.search(pattern, file).group().split('_set')[0] for file in files if re.search(pattern, file))
-	hybrid_count = {key: counts[key] for key in natsorted(counts)}
-	hybrid,_ = max(hybrid_count.items(), key=lambda x: x[1])
-	xmls = [file for file in files if hybrid in file]
-	xmls = sorted(xmls, key=lambda x: os.path.basename(x))
-	points = [tuple(map(float, get_xml_field(xml, 'stage_position').split(','))) for xml in xmls]
-	#print(np.array(points))
-	coords = points_to_coords(points)
-	return coords
-
-
 def set_data(args):
 	group = args.config['codebooks'][0]
 	pattern = group['hyb_pattern']
@@ -88,8 +75,8 @@ def set_data(args):
 	for sset in sorted(batch):
 		for fov in sorted(batch[sset]):
 			point = list()
-			for hyb,data in natsorted(batch[sset][fov].items()):
-				path = data['zarr']
+			for hyb,dic in natsorted(batch[sset][fov].items()):
+				path = dic['zarr']
 				dirname = os.path.dirname(path)
 				basename = os.path.basename(path)
 				file = glob.glob(os.path.join(dirname,'*' + basename + '.xml'))[0]
@@ -109,6 +96,34 @@ def set_data(args):
 	args.batch = batch
 	#counts = Counter(re.search(pattern, file).group().split('_set')[0] for file in files if re.search(pattern, file))
 	#hybrid_count = {key: counts[key] for key in natsorted(counts)}
+
+def count_bits(args):
+	group = args.config['codebooks'][0]
+	with open(group['codebook_path'], 'r') as fp:
+		return next(fp).rstrip().count('bit')
+
+def count_colors(args):
+	batch = args.batch
+	sset = next(iter(batch))
+	fov = next(iter(batch[sset]))
+	hyb = next(iter(batch[sset][fov]))
+	dic = batch[sset][fov][hyb]
+
+	path = dic['zarr']
+	dirname = os.path.dirname(path)
+	basename = os.path.basename(path)
+	file = glob.glob(os.path.join(dirname,'*' + basename + '.xml'))[0]
+	colors = get_xml_field(file, 'z_offsets').split(':')[-1]
+	return int(colors)
+
+def count_hybs(args):
+	bits = count_bits(args)
+	colors = count_colors(args) - 1
+	num = bits / colors
+	print(num)
+	print(args)
+
+	
 
 if __name__ == "__main__":
 	# wcmatch requires ?*+@ before the () group pattern 

@@ -24,6 +24,13 @@ sys.path.pop(0)
 sys.path.append('mermake')
 from utils import *
 
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import multiprocessing
+def worker(procnum):
+	sleep(2)
+	return 'str',procnum
+
+
 def dict_to_namespace(d):
 	"""Recursively convert dictionary into SimpleNamespace."""
 	for key, value in d.items():
@@ -65,7 +72,34 @@ def open_terminal() -> Generator:
 	with t.fullscreen(), t.hidden_cursor():
 		yield t
 
-class Grid
+class Grid(list):
+	def __init__(self, rows, cols):
+		self.flip = False
+		if rows > cols:
+			self.flip = True
+		# Define grid dimensions
+		self.cell_width = 2
+		self.cell_height = 1
+		# Define grid characters
+		self.char_blank = "░"
+		self.path_char = "■"  # Character to highlight the path
+		for row in range(rows):  # Include last line for grid border
+			line = []
+			for col in range(cols):  # Include last column for grid border
+				line.append(self.char_blank)
+				line.append(self.char_blank)
+			line.append('\n')
+			self.append(line)
+	def set(self, row, col, char):
+		self[row * self.cell_height + 1][ col * self.cell_width + 1] = char
+	def __repr__(self):
+		if self.flip:
+			# Transpose the grid (excluding newline characters)
+			transposed = list(map(list, zip(*[row[:-1] for row in self])))
+			return '\n'.join(''.join(row) for row in transposed)
+		else:
+			return ''.join(''.join(item) for item in self)
+
 
 class ColorLog(Log):
 	def __init__(self, title="", border_color=7, text_color=None, *args, **kwargs):
@@ -78,30 +112,6 @@ class ColorLog(Log):
 		colored_message = self.text_color(message)
 		super().append(colored_message)
 
-def joined(lol):
-	return ''.join(''.join(l) for l in lol)
-
-# Define grid dimensions
-cell_width = 2
-cell_height = 1
-# Define grid characters
-corner_char = "C"
-horizontal_char = "H"
-vertical_char = "V"
-char_blank = "░"
-path_char = "■"  # Character to highlight the path
-
-def make_grid(rows, cols):
-	#print(term.clear)
-	grid = []
-	for row in range(rows):  # Include last line for grid border
-		line = []
-		for col in range(cols):  # Include last column for grid border
-			line.append(char_blank)
-			line.append(char_blank)
-		line.append('\n')
-		grid.append(line)
-	return grid
 
 if __name__ == "__main__":
 	usage = '%s [-opt1, [-opt2, ...]] config.toml' % __file__
@@ -109,27 +119,25 @@ if __name__ == "__main__":
 	parser.add_argument('config', type=is_valid_file, help='config file')
 	#parser.add_argument('-o', '--outfile', action="store", default=sys.stdout, type=argparse.FileType('w'), help='where to write output [stdout]')
 	args = parser.parse_args()
-	
-	set_data(args)
 
+	set_data(args)
+	'''
+	for sset in sorted(args.batch):
+		for fov in sorted(args.batch[sset]):
+			block = args.batch[sset][fov]
+			print(block)
+			exit()
+	#count_hybs(args)
+	'''
 	maxx = max(grid[0] for sset in args.batch.values() for fov in sset.values() for grid in [fov['grid_position']])
 	maxy = max(grid[1] for sset in args.batch.values() for fov in sset.values() for grid in [fov['grid_position']])
 
-	'''
-	for sset in args.batch:
-		for fov in args.batch[sset]:
-			point = args.batch[sset][fov]['stage_position']
-			coord = args.batch[sset][fov]['grid_position']
-			print(sset, fov, coord[0], coord[1], point[0], point[1], sep='\t')
-	exit()
-	'''
-	#coords = get_coords(args)
-	grid = make_grid(maxx+2, maxy+2)
+	grid = Grid(maxx+2, maxy+2)
 	# Create the terminal layout
 	ui = HSplit(
 			#HSplit(
 				#Graphic(title="Graphic Example", border_color=5, height=maxs[0], width=(2*maxs[1])),
-				Grext(joined(grid), title='Grext', color=1, border_color=1),
+				Grext(str(grid), title='Grext', color=1, border_color=1),
 				ColorLog(title="logs", border_color=5, text_color=Terminal().red)
 			#),
 			#title='Dashing',
@@ -140,39 +148,46 @@ if __name__ == "__main__":
 	log_tile = ui.items[1]
 	log_tile.append("Logs")
 
-	# Draw some characters and strings
-	#graphic_tile.draw_char(2, 2, "@")
-	#graphic_tile.draw_char(3, 3, "#")
-	#graphic_tile.draw_string(5, 5, "Hello, Dashing!")
-
 	#input("Press Enter to clear the graphic...")
 
 	# Clear the graphic and render again
 	#graphic_tile.clear()
 	#ui.display()
 
-	#draw_grid(*maxs, graphic_tile)
-
 	prev_time = time()
 	terminal = Terminal()
 	with terminal.fullscreen(), terminal.hidden_cursor():
-		for sset in args.batch:
-			for fov in args.batch[sset]:
+		log_tile.append("Checking xml data....")
+		for sset in sorted(args.batch):
+			for fov in sorted(args.batch[sset]):
 				coord = args.batch[sset][fov]['grid_position']
+				point = args.batch[sset][fov]['stage_position']
+				grid.set(coord[0], coord[1],  terminal.yellow('■'))
+				graphic_tile.text = str(grid)
+				log_tile.append(str(coord))
 				ui.display()
-				grid[coord[0] * cell_height + 1][ coord[1] * cell_width + 1] = terminal.green(path_char)
-				graphic_tile.text = joined(grid)
-				sleep(1.0/5)
-				'''
-				while True:
-					ui.display()
-					sleep(1.0 / 25)
-					t = int(time())
-					if t != prev_time:
-						log_tile.append("%s" % t)
-						prev_time = t
-				'''
-		while True:
-			sleep(1)
+				sleep(1.0/10)
+		log_tile.append("Checking hyb data....")
+		with ProcessPoolExecutor(max_workers=5) as executor:
+			future_to_task = dict()
+			i = 0
+			for sset in sorted(args.batch):
+				for fov in sorted(args.batch[sset]):
+					block = args.batch[sset][fov]['grid_position']
+					future_to_task[executor.submit(worker, coord)] = i
+					i += 1
+
+			for future in as_completed(future_to_task):  # Process results as they complete
+				i, coord = future.result()
+				log_tile.append(f"Task {i} completed with result: {coord}")
+				grid.set(coord[0], coord[1],  terminal.green('■'))
+				graphic_tile.text = str(grid)
+				ui.display()
+
+
+			log_tile.append(f"Done!")
+			ui.display()
+			while True:
+				sleep(1)
 
 

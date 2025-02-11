@@ -1,7 +1,7 @@
 [[codebooks]]
 name = 'AER'
-codebook_path = 'C:/Scripts/NMERFISH/codebooks/codebook_code_color2__ExtraAaron_8_6_blank.csv' ### 
-hyb_pattern = 'H([0-9]|1[0-6])_AER_set[0-9]'
+codebook_path = '/home/katelyn/MERMAKE/codebooks/codebook_code_color2__ExtraAaron_8_6_blank.csv' ### 
+hyb_pattern = 'H([0-9]|1[0-6])_AER_set6'
 hyb_folders = [
 				'/data/07_22_2024__PFF_PTBP1',
 				]
