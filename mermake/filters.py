@@ -1,9 +1,11 @@
-#import numpy as np
+import numpy as np
 import cupy as cp
 
-def laplacian_3d(shape: tuple[int, int, int]) -> cp.ndarray:
+def laplacian_3d_like(image):
 	"""Define the 3D Laplacian in the spatial domain."""
-	lap = cp.zeros(shape, dtype=cp.float32)
+	xp = cp.get_array_module(image)
+	shape = image.shape
+	lap = xp.zeros(shape, dtype=cp.float32)
 
 	z_c, y_c, x_c = shape[0] // 2, shape[1] // 2, shape[2] // 2
 
@@ -13,11 +15,11 @@ def laplacian_3d(shape: tuple[int, int, int]) -> cp.ndarray:
 	lap[z_c, y_c - 1, x_c] = -1
 	lap[z_c, y_c + 1, x_c] = -1
 	lap[z_c, y_c, x_c - 1] = -1
-	lap[z_c, y_c, x_c + 1] = -1
+	lap[z_c, y_c, x_c - 1] = -1 # ERROR: SHOULD BE +1
 
 	return lap
 
-def pad_3d(image: cp.ndarray, psf: cp.ndarray, pad: int | tuple[int, int, int]) -> tuple[cp.ndarray, cp.ndarray, tuple[int, int, int]]:
+def pad_3d(image, psf, pad):
 	"""
 	Pad a 3D image and its PSF for deconvolution
 
@@ -29,6 +31,7 @@ def pad_3d(image: cp.ndarray, psf: cp.ndarray, pad: int | tuple[int, int, int]) 
 	Returns:
 		tuple: (padded image, padded psf, padding tuple)
 	"""
+	xp = cp.get_array_module(image)
 	padding = pad
 	if isinstance(pad, tuple) and len(pad) != image.ndim:
 		raise ValueError("Padding must be the same dimension as image")
@@ -40,9 +43,9 @@ def pad_3d(image: cp.ndarray, psf: cp.ndarray, pad: int | tuple[int, int, int]) 
 		# Convert padding format for cupy.pad
 		pad_width = ((padding[0], padding[0]), (padding[1], padding[1]), (padding[2], padding[2]))
 		# Reflection padding for image (to match torch.nn.ReflectionPad3d)
-		image_pad = cp.pad(image, pad_width, mode='reflect')
+		image_pad = xp.pad(image, pad_width, mode='reflect')
 		# Constant padding (zero) for PSF
-		psf_pad = cp.pad(psf, pad_width, mode='constant', constant_values=0)
+		psf_pad = xp.pad(psf, pad_width, mode='constant', constant_values=0)
 	else:
 		image_pad = image
 		psf_pad = psf
@@ -50,40 +53,86 @@ def pad_3d(image: cp.ndarray, psf: cp.ndarray, pad: int | tuple[int, int, int]) 
 
 def wiener_deconvolve(image, psf, beta=0.001, pad=0):
 	"""Perform 3D Wiener deconvolution with Laplacian regularization using CuPy (GPU-accelerated)."""
+	xp = cp.get_array_module(image)
 	# Normalize PSF
 	psf /= cp.sum(psf)
 	# Pad image and PSF
-	#print(image.dtype)
 	image_pad, psf_pad, padding = pad_3d(image, psf, pad)
-	#print(image_pad.dtype)
 	# Convert to frequency domain
 	image_fft = cp.fft.fftn(image_pad)
 	# Roll the PSF (shift it to the center)
-	psf_roll = cp.roll(psf_pad, shift=(-psf_pad.shape[0] // 2, -psf_pad.shape[1] // 2, -psf_pad.shape[2] // 2), axis=(0, 1, 2))
-	psf_fft = cp.fft.fftn(psf_roll)
-	laplacian_fft = cp.fft.fftn(laplacian_3d(image_pad.shape))
+	psf_pad = xp.roll(psf_pad, shift=(-psf_pad.shape[0] // 2, -psf_pad.shape[1] // 2, -psf_pad.shape[2] // 2), axis=(0, 1, 2))
+	psf_fft = xp.fft.fftn(psf_pad)
+	laplacian_fft = xp.fft.fftn(laplacian_3d_like(image_pad))
 	# Wiener filtering with Laplacian regularization
 	#den = psf_fft * cp.conj(psf_fft) + beta * laplacian_fft * cp.conj(laplacian_fft)
-	# faster power spectrum calculation
-	den = cp.abs(psf_fft) ** 2 + beta * cp.abs(laplacian_fft) ** 2
+	den = xp.abs(psf_fft) ** 2 + beta * xp.abs(laplacian_fft) ** 2 # faster power spectrum calculation
 	deconv_fft = image_fft * cp.conj(psf_fft) / den
 	# Convert back to spatial domain and unpad
-	deconv_image = cp.real(cp.fft.ifftn(deconv_fft))
-	#deconv_image = (deconv_image - cp.min(deconv_image)) / (cp.max(deconv_image) - cp.min(deconv_image))
+	image_pad[:] = xp.real(xp.fft.ifftn(deconv_fft))
+	'''
+	psf_conj = xp.conj(psf_fft)  # Preserve original psf_fft phase information
+	xp.abs(psf_fft, out=psf_fft)
+	xp.square(psf_fft, out=psf_fft)
+	#laplacian_abs2 = xp.abs(laplacian_fft) ** 2
+	#xp.multiply(laplacian_abs2, 0.001, out=laplacian_abs2)
+	xp.abs(laplacian_fft, out=laplacian_fft)
+	xp.square(laplacian_fft, out=laplacian_fft)
+	xp.add(psf_fft, laplacian_abs2, out=psf_fft)
+	xp.multiply(image_fft, psf_conj, out=image_fft)
+	xp.true_divide(image_fft, psf_fft, out=image_fft)
+
+	# Convert back to spatial domain
+	image_pad[:] = xp.real(xp.fft.ifftn(image_fft))
+	'''
+	'''
+	# do all the operations in place
+	psf_conj = xp.conj(psf_fft)
+	xp.abs(psf_fft, out=psf_fft)
+	xp.square(psf_fft, out=psf_fft)
+	xp.add(psf_fft, 0.001, out=psf_fft)
+	xp.abs(laplacian_fft, out=laplacian_fft)
+	xp.square(laplacian_fft, out=laplacian_fft)
+	xp.multiply(psf_fft, laplacian_fft, out=psf_fft) 
+	xp.multiply(image_fft, psf_conj, out=image_fft)
+	xp.true_divide(image_fft, psf_fft, out=image_fft)
+	image_pad[:] = xp.real(xp.fft.ifftn(image_fft))
+	'''
+	'''
+	# this works and has one less array but apparently x*y/z is not equal to x/z*y for complex
+	image_fft = xp.conj(psf_fft)
+	xp.abs(psf_fft, out=psf_fft)
+	xp.square(psf_fft, out=psf_fft)
+	xp.add(psf_fft, 0.001, out=psf_fft)
+	xp.abs(laplacian_fft, out=laplacian_fft)
+	xp.multiply(psf_fft, laplacian_fft, out=psf_fft) 
+	xp.square(laplacian_fft, out=laplacian_fft)
+	laplacian_fft[:] = cp.fft.fftn(image_pad)
+	xp.multiply(image_fft, laplacian_fft, out=image_fft)
+	xp.true_divide(image_fft, psf_fft, out=image_fft)
+	image_pad[:] = xp.real(xp.fft.ifftn(image_fft))
+	'''
+	'''
+	import gc
+	for obj in gc.get_objects():
+		if isinstance(obj, cp.ndarray):
+			print(f"CuPy array with shape {obj.shape} and dtype {obj.dtype}")
+	exit()
+	'''
 	if image_pad.shape != image.shape:
-		return unpad_3d(deconv_image, padding)
+		return unpad_3d(image_pad, padding)
 	return deconv_image
 
-def unpad_3d(image: cp.ndarray, padding: tuple[int, int, int]) -> cp.ndarray:
+def unpad_3d(image, padding):
 	"""
 	Remove the padding of a 3D image.
 
 	Parameters:
-		image (cp.ndarray): 3D image to un-pad.
+		image (ndarray): 3D image to un-pad.
 		padding (tuple[int, int, int]): Padding in each dimension.
 
 	Returns:
-		cp.ndarray: Unpadded image.
+		ndarray: Unpadded image.
 	"""
 	return image[padding[0]:-padding[0], padding[1]:-padding[1], padding[2]:-padding[2]]
 
@@ -93,23 +142,21 @@ def center_psf(psf, target_shape):
 	cropping if necessary.
 
 	Parameters:
-	- psf (cp.ndarray): The PSF array to insert.
+	- psf (ndarray): The PSF array to insert.
 	- target_shape (tuple): The desired output shape.
 
 	Returns:
 	- cp.ndarray: The centered PSF inside a zero-padded/cropped array.
 	"""
-	psff = cp.zeros(target_shape, dtype=cp.float32)
-
-	target_shape_cp = cp.array(target_shape, dtype=cp.int32)
-	psf_shape_cp = cp.array(psf.shape, dtype=cp.int32)
+	xp = cp.get_array_module(psf)
+	psff = xp.zeros(target_shape, dtype=xp.float32)
 
 	# Compute start & end indices for both the source and target
-	start_psff = ((target_shape_cp - psf_shape_cp) // 2).astype(cp.int32)
-	end_psff = start_psff + cp.minimum(target_shape_cp, psf_shape_cp)
+	start_psff = ((target_shape - psf_shape) // 2).astype(xp.int32)
+	end_psff = start_psff + xp.minimum(target_shape, psf_shape)
 
-	start_psf = ((psf_shape_cp - target_shape_cp) // 2).astype(cp.int32)
-	end_psf = start_psf + cp.minimum(target_shape_cp, psf_shape_cp)
+	start_psf = ((psf_shape - target_shape) // 2).astype(xp.int32)
+	end_psf = start_psf + xp.minimum(target_shape, psf_shape)
 
 	# Assign using slices
 	slices_psff = tuple(slice(start, end) for start, end in zip(start_psff, end_psff))
