@@ -21,7 +21,7 @@ from sdeconv.core import SSettings
 from sdeconv.deconv.interface import SDeconvFilter
 from sdeconv.deconv._utils import pad_2d, pad_3d, unpad_3d, psf_parameter
 
-from filters import wiener_deconvolve
+from mermake.filters import wiener_deconvolve
 
 
 def parse_psf(im,psf):
@@ -113,7 +113,7 @@ def full_deconv_cupy_map(im__, psfs):  # Accept exactly two arguments
 	return None
 
 if __name__ == "__main__":
-	psf_file = 'psfs/dic_psf_60X_cy5_Scope5.pkl'
+	psf_file = '../psfs/dic_psf_60X_cy5_Scope5.pkl'
 	psfs = np.load(psf_file, allow_pickle=True)
 	
 	fov = 'Conv_zscan1_002.zarr'
@@ -123,7 +123,7 @@ if __name__ == "__main__":
 	#im__ = np.array(im_[icol],dtype=np.float32)
 	im__ = np.array(im_[icol])
 	### new method
-	fl_med = 'flat_field/Scope5_med_col_raw'+str(icol)+'.npz'
+	fl_med = '../flat_field/Scope5_med_col_raw'+str(icol)+'.npz'
 	if os.path.exists(fl_med):
 		im_med = np.array(np.load(fl_med)['im'],dtype=np.float32)
 		im_med = cv2.blur(im_med,(20,20))
@@ -181,11 +181,8 @@ if __name__ == "__main__":
 		image_fft = cp.ascontiguousarray(image_fft, dtype=cp.float16)  # Forces in-place conversion
 		cp.get_default_memory_pool().free_all_blocks()  # Free up memory immediately
 	del psf_fft, psf_conj
-
 	end = time.time()
-	max_usage = mempool.used_bytes()
 	print(f"cupy (untiled) time: {end - start:.6f} seconds")
-	#print(f"CuPy Max GPU Memory Used: {max_usage / 1e6:.2f} MB")
 	gc.collect()
 	cp.get_default_memory_pool().free_all_blocks()
 	cp.get_default_pinned_memory_pool().free_all_blocks()

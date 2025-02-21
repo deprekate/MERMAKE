@@ -65,53 +65,23 @@ def wiener_deconvolve(image, psf, beta=0.001, pad=0):
 	psf_fft = xp.fft.fftn(psf_pad)
 	laplacian_fft = xp.fft.fftn(laplacian_3d_like(image_pad))
 	# Wiener filtering with Laplacian regularization
-	#den = psf_fft * cp.conj(psf_fft) + beta * laplacian_fft * cp.conj(laplacian_fft)
-	den = xp.abs(psf_fft) ** 2 + beta * xp.abs(laplacian_fft) ** 2 # faster power spectrum calculation
+	'''
+	# THIS IS ALL POORLY OPTIMIZED CODE
+	den = psf_fft * cp.conj(psf_fft) + beta * laplacian_fft * cp.conj(laplacian_fft)
 	deconv_fft = image_fft * cp.conj(psf_fft) / den
 	# Convert back to spatial domain and unpad
 	image_pad[:] = xp.real(xp.fft.ifftn(deconv_fft))
 	'''
-	psf_conj = xp.conj(psf_fft)  # Preserve original psf_fft phase information
-	xp.abs(psf_fft, out=psf_fft)
-	xp.square(psf_fft, out=psf_fft)
-	#laplacian_abs2 = xp.abs(laplacian_fft) ** 2
-	#xp.multiply(laplacian_abs2, 0.001, out=laplacian_abs2)
-	xp.abs(laplacian_fft, out=laplacian_fft)
-	xp.square(laplacian_fft, out=laplacian_fft)
-	xp.add(psf_fft, laplacian_abs2, out=psf_fft)
-	xp.multiply(image_fft, psf_conj, out=image_fft)
-	xp.true_divide(image_fft, psf_fft, out=image_fft)
-
-	# Convert back to spatial domain
-	image_pad[:] = xp.real(xp.fft.ifftn(image_fft))
-	'''
-	'''
-	# do all the operations in place
+	# THIS IS ALL INPLACE TESTING STUFF
 	psf_conj = xp.conj(psf_fft)
-	xp.abs(psf_fft, out=psf_fft)
-	xp.square(psf_fft, out=psf_fft)
-	xp.add(psf_fft, 0.001, out=psf_fft)
-	xp.abs(laplacian_fft, out=laplacian_fft)
-	xp.square(laplacian_fft, out=laplacian_fft)
-	xp.multiply(psf_fft, laplacian_fft, out=psf_fft) 
+	xp.multiply(psf_fft, psf_conj, out=psf_fft)
+	xp.multiply(laplacian_fft, laplacian_fft.conj(), out=laplacian_fft)
+	xp.multiply(laplacian_fft, beta, out=laplacian_fft)
+	xp.add(psf_fft, laplacian_fft, out=psf_fft)
 	xp.multiply(image_fft, psf_conj, out=image_fft)
 	xp.true_divide(image_fft, psf_fft, out=image_fft)
-	image_pad[:] = xp.real(xp.fft.ifftn(image_fft))
-	'''
-	'''
-	# this works and has one less array but apparently x*y/z is not equal to x/z*y for complex
-	image_fft = xp.conj(psf_fft)
-	xp.abs(psf_fft, out=psf_fft)
-	xp.square(psf_fft, out=psf_fft)
-	xp.add(psf_fft, 0.001, out=psf_fft)
-	xp.abs(laplacian_fft, out=laplacian_fft)
-	xp.multiply(psf_fft, laplacian_fft, out=psf_fft) 
-	xp.square(laplacian_fft, out=laplacian_fft)
-	laplacian_fft[:] = cp.fft.fftn(image_pad)
-	xp.multiply(image_fft, laplacian_fft, out=image_fft)
-	xp.true_divide(image_fft, psf_fft, out=image_fft)
-	image_pad[:] = xp.real(xp.fft.ifftn(image_fft))
-	'''
+	image_fft[:] = xp.fft.ifftn(image_fft)
+	image_pad[:] = xp.real(image_fft)
 	'''
 	import gc
 	for obj in gc.get_objects():
@@ -121,7 +91,7 @@ def wiener_deconvolve(image, psf, beta=0.001, pad=0):
 	'''
 	if image_pad.shape != image.shape:
 		return unpad_3d(image_pad, padding)
-	return deconv_image
+	return image_pad
 
 def unpad_3d(image, padding):
 	"""
