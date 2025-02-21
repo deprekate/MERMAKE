@@ -5,7 +5,7 @@ def laplacian_3d_like(image):
 	"""Define the 3D Laplacian in the spatial domain."""
 	xp = cp.get_array_module(image)
 	shape = image.shape
-	lap = xp.zeros(shape, dtype=cp.float32)
+	lap = xp.zeros(shape, dtype=xp.float32)
 
 	z_c, y_c, x_c = shape[0] // 2, shape[1] // 2, shape[2] // 2
 
@@ -55,11 +55,11 @@ def wiener_deconvolve(image, psf, beta=0.001, pad=0):
 	"""Perform 3D Wiener deconvolution with Laplacian regularization using CuPy (GPU-accelerated)."""
 	xp = cp.get_array_module(image)
 	# Normalize PSF
-	psf /= cp.sum(psf)
+	psf /= xp.sum(psf)
 	# Pad image and PSF
 	image_pad, psf_pad, padding = pad_3d(image, psf, pad)
 	# Convert to frequency domain
-	image_fft = cp.fft.fftn(image_pad)
+	image_fft = xp.fft.fftn(image_pad)
 	# Roll the PSF (shift it to the center)
 	psf_pad = xp.roll(psf_pad, shift=(-psf_pad.shape[0] // 2, -psf_pad.shape[1] // 2, -psf_pad.shape[2] // 2), axis=(0, 1, 2))
 	psf_fft = xp.fft.fftn(psf_pad)
