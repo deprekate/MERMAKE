@@ -1,3 +1,6 @@
+import os
+#os.environ["CUDA_VISIBLE_DEVICES"] = "1"  # Change "1" to the desired GPU ID
+
 import time
 import gc
 import cupy as cp
@@ -10,18 +13,15 @@ from time import sleep
 import multiprocessing
 multiprocessing.set_start_method('spawn', force=True)
 from multiprocessing import Pool
+from concurrent.futures import ThreadPoolExecutor
 
-import torch
-from sdeconv.core import SSettings
-obj = SSettings.instance()
-obj.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 import torch
 from sdeconv.core import SSettings
 from sdeconv.deconv.interface import SDeconvFilter
 from sdeconv.deconv._utils import pad_2d, pad_3d, unpad_3d, psf_parameter
 
-from mermake.filters import wiener_deconvolve
+from filters import wiener_deconvolve
 
 
 def parse_psf(im,psf):
@@ -47,6 +47,9 @@ def center_psf(psf, target_shape=(40, 300, 300)):
     psff = cp.zeros(target_shape, dtype=cp.float16)
     psf = cp.asarray(psf)
 
+	# Normalize
+    psf /= cp.sum(psf)
+
     # Compute start & end indices for both the source and target
     start_psff = cp.asnumpy(cp.maximum(0, (cp.array(target_shape) - cp.array(psf.shape)) // 2)).tolist()
     end_psff = (cp.array(start_psff) + cp.minimum(cp.array(target_shape), cp.array(psf.shape))).tolist()
@@ -56,7 +59,6 @@ def center_psf(psf, target_shape=(40, 300, 300)):
 
     # Assign using slices (convert CuPy arrays to native Python integers)
     psff[tuple(slice(int(s), int(e)) for s, e in zip(start_psff, end_psff))] = psf[tuple(slice(int(s), int(e)) for s, e in zip(start_psf, end_psf))]
-    psff /= cp.sum(psff)
     return psff
 
 import cupy as cp
@@ -70,13 +72,8 @@ def laplacian_3d(shape):
     lap[z_c, y_c - 1, x_c] = -1
     lap[z_c, y_c + 1, x_c] = -1
     lap[z_c, y_c, x_c - 1] = -1
-    lap[z_c, y_c, x_c + 1] = -1  # Bug fix (previously had two -1s at the same position)
+    lap[z_c, y_c, x_c - 1] = -1  # Bug fix (previously had two -1s at the same position)
     return lap
-
-def batch_laplacian(batch_size, spatial_shape):
-    """Efficiently create a 4D Laplacian for batch processing."""
-    lap = laplacian_3d(spatial_shape)  # Create a single 3D Laplacian
-    return lap[None, ...]  # Add batch dim without repeating memory
 
 def batch_laplacian_fft(batch_size, spatial_shape):
     """Compute the 3D Laplacian in frequency space and prepare for batch processing."""
@@ -84,20 +81,6 @@ def batch_laplacian_fft(batch_size, spatial_shape):
     lap_fft = cp.fft.fftn(cp.fft.ifftshift(lap))  # Shift Laplacian to center before FFT
     return lap_fft[None, ...]  # Add batch dimension without copying memory
 
-def pad_patch(patch, pad_width):
-    """
-    Pads each patch (z, x, y) individually with zeros.
-
-    Parameters:
-    - patch: cupy.ndarray, input patch with shape (z, x, y).
-    - pad_width: tuple, padding size for (x, y).
-
-    Returns:
-    - padded_patch: cupy.ndarray, padded patch.
-    """
-    return cp.pad(patch, ((0, 0), (pad_width[0], pad_width[0]),
-                          (pad_width[1], pad_width[1])),
-                  mode='constant', constant_values=0)
 
 def full_deconv_map(im__, psfs):  # Accept exactly two arguments
 	out = full_deconv(im__, s_=500, pad=100, psf=psfs, parameters={'method':'wiener','beta':0.001}, gpu=True, force=True)
@@ -107,23 +90,88 @@ def full_deconv_map(im__, psfs):  # Accept exactly two arguments
 	torch.cuda.ipc_collect()  # Helps with memory fragmentation
 	return None
 
+cp.cuda.Device(1).use()
+#streams = [cp.cuda.Stream(non_blocking=True ) for _ in range(6)]  # Create separate streams
+
 def full_deconv_cupy_map(im__, psfs):  # Accept exactly two arguments
-	out = full_deconv_cupy(im__, s_=500, pad=100, psf=psfs, parameters={'method':'wiener','beta':0.001}, gpu=True, force=True)
+#def full_deconv_cupy_map(im__, psfs, stream_id):
+	#cp.cuda.Device(1).use()
+	#with streams[stream_id]:
+	out = full_deconv(im__, s_=500, pad=100, psf=psfs, parameters={'method':'cupy','beta':0.001}, gpu=True, force=True)
 	del out
+	gc.collect()
+	cp.get_default_memory_pool().free_all_blocks()
+	cp.get_default_pinned_memory_pool().free_all_blocks()
 	return None
 
+def process_image(im, psfs, stream):
+    """Run full_deconv for one image using its own stream."""
+    return full_deconv_cupy_map(im, psfs, stream)
+
+
+def wrap_pad(tiles, pad):
+    H, W, C, T_H, T_W = tiles.shape  # (10, 10, 40, 300, 300)
+
+    # Initialize padded array
+    padded = np.zeros((H, W, C, T_H + 2 * pad, T_W + 2 * pad), dtype=tiles.dtype)
+
+    # Center region (original tiles)
+    padded[:, :, :, pad:-pad, pad:-pad] = tiles
+
+    # Wrap edges
+    padded[:, :, :, :pad, pad:-pad] = tiles[(np.arange(H) - 1) % H, :, :, -pad:, :]  # Top from bottom neighbor
+    padded[:, :, :, -pad:, pad:-pad] = tiles[(np.arange(H) + 1) % H, :, :, :pad, :]  # Bottom from top neighbor
+    padded[:, :, :, pad:-pad, :pad] = tiles[:, (np.arange(W) - 1) % W, :, :, -pad:]  # Left from right neighbor
+    padded[:, :, :, pad:-pad, -pad:] = tiles[:, (np.arange(W) + 1) % W, :, :, :pad]  # Right from left neighbor
+
+    # Wrap corners correctly
+    padded[:, :, :, :pad, :pad] = tiles[(np.arange(H) - 1) % H, (np.arange(W) - 1) % W, :, -pad:, -pad:]  # Top-left from bottom-right
+    padded[:, :, :, :pad, -pad:] = tiles[(np.arange(H) - 1) % H, (np.arange(W) + 1) % W, :, -pad:, :pad]  # Top-right from bottom-left
+    padded[:, :, :, -pad:, :pad] = tiles[(np.arange(H) + 1) % H, (np.arange(W) - 1) % W, :, :pad, -pad:]  # Bottom-left from top-right
+    padded[:, :, :, -pad:, -pad:] = tiles[(np.arange(H) + 1) % H, (np.arange(W) + 1) % W, :, :pad, :pad]  # Bottom-right from top-left
+
+    return padded
+
+def extract_overlapping_tiles(image, tile_size, pad):
+    """
+    Extracts overlapping tiles from an image ensuring exactly 100 tiles.
+
+    Args:
+        image (ndarray): Input array of shape (C, H, W).
+        tile_size (int): Size of each tile before padding.
+        pad (int): Overlap/padding size.
+
+    Returns:
+        ndarray: Overlapping tiles of shape (100, C, tile_size+2*pad, tile_size+2*pad).
+    """
+    C, H, W = image.shape
+    full_tile_size = tile_size + 2 * pad  # Tile size including padding
+    step = tile_size  # Non-overlapping stride
+
+    # Ensure exactly 10 x 10 tiles = 100 tiles
+    y_positions = np.linspace(0, H - full_tile_size, 10, dtype=int)
+    x_positions = np.linspace(0, W - full_tile_size, 10, dtype=int)
+
+    tiles = []
+    for y in y_positions:
+        for x in x_positions:
+            tile = image[:, y:y+full_tile_size, x:x+full_tile_size]
+            tiles.append(tile)
+
+    return np.stack(tiles, axis=0)
+
+
 if __name__ == "__main__":
-	psf_file = '../psfs/dic_psf_60X_cy5_Scope5.pkl'
+	psf_file = 'psfs/dic_psf_60X_cy5_Scope5.pkl'
 	psfs = np.load(psf_file, allow_pickle=True)
-	
 	fov = 'Conv_zscan1_002.zarr'
 	fld = '/data/07_22_2024__PFF_PTBP1/H0_AER_set1'
 	icol = 2
 	im_ = read_im(fld+os.sep+fov)
 	#im__ = np.array(im_[icol],dtype=np.float32)
-	im__ = np.array(im_[icol])
+	im__ = np.array(im_[-1])
 	### new method
-	fl_med = '../flat_field/Scope5_med_col_raw'+str(icol)+'.npz'
+	fl_med = 'flat_field/Scope5_med_col_raw'+str(icol)+'.npz'
 	if os.path.exists(fl_med):
 		im_med = np.array(np.load(fl_med)['im'],dtype=np.float32)
 		im_med = cv2.blur(im_med,(20,20))
@@ -132,64 +180,82 @@ if __name__ == "__main__":
 	else:
 		print(fl_med)
 		print("Did not find flat field")
-
+	mempool = cp.get_default_memory_pool()
 	import gc
 	pad = 50
-	n = 20
+	n = 50
+	beta = 0.001
 	items = [ (im__,psfs) for _ in range(n)]
-	
-	psf_batch = cp.stack(list(map(center_psf, psfs.values())))
+	psf_batch = cp.stack(list(map(center_psf, list(psfs.values()))))
+	psf_batch = cp.pad(psf_batch, ((0, 0), (20, 20), (pad, pad), (pad, pad)), mode='constant', constant_values=0)
 	psf_batch = cp.roll(psf_batch,
                    shift=(-psf_batch.shape[1] // 2, -psf_batch.shape[2] // 2, -psf_batch.shape[3] // 2),
                    axis=(1, 2, 3))
-	psf_batch = cp.pad(psf_batch, ((0, 0), (0, 0), (pad, pad), (pad, pad)), mode='constant')
+	'''
+	import gc
+	gc.collect()
+	for obj in gc.get_objects():
+		if isinstance(obj, cp.ndarray):
+			print(f"CuPy array with shape {obj.shape} and dtype {obj.dtype}")
+			print(f"Memory usage: {obj.nbytes / 1024**2:.2f} MB")  # Convert to MB
+	print(f"Used memory after: {mempool.used_bytes() / 1024**2:.2f} MB")
+	'''
 	psf_fft = cp.fft.fftn(psf_batch, axes=(-3, -2, -1))
-	laplacian_fft = batch_laplacian_fft(100, (40,400,400))  # Shape: (1, 40, 300, 300)
+	del psf_batch
+	laplacian_fft = batch_laplacian_fft(100, (40+40,300+2*pad,300+2*pad))  # Shape: (1, 40, 300, 300)
 	psf_conj = cp.conj(psf_fft)
-	cp.abs(psf_fft, out=psf_fft)
-	cp.square(psf_fft, out=psf_fft)
-	cp.add(psf_fft, 0.001, out=psf_fft)
-	cp.abs(laplacian_fft, out=laplacian_fft)
-	cp.square(laplacian_fft, out=laplacian_fft)
-	cp.multiply(psf_fft, laplacian_fft, out=psf_fft) 
-	del psf_batch, laplacian_fft
-	
-	mempool = cp.get_default_memory_pool()
-	pinned_mempool = cp.get_default_pinned_memory_pool()
+	cp.multiply(psf_fft, psf_conj, out=psf_fft)
+	cp.multiply(laplacian_fft, laplacian_fft.conj(), out=laplacian_fft)
+	cp.multiply(laplacian_fft, beta, out=laplacian_fft)
+	cp.add(psf_fft, laplacian_fft, out=psf_fft)
+	del laplacian_fft
+	#gc.collect()
+	#cp.get_default_memory_pool().free_all_blocks()
+	#cp.get_default_pinned_memory_pool().free_all_blocks()
 	start = time.time()
 	for _ in range(n):
-		im_batch = im__.reshape(40, 10, 300, 10, 300)
-		im_batch = im_batch.transpose(1, 3, 0, 2, 4).reshape(100, 40, 300, 300)
+		#im_batch = im__.reshape(40, 10, 300, 10, 300)
+		#im_batch = im_batch.transpose(1, 3, 0, 2, 4).reshape(100, 40, 300, 300)
+		im_batch = extract_overlapping_tiles(im__, 300, 50)
 		im_batch = cp.asarray(im_batch, dtype=np.float16)
-		im_batch = cp.pad(im_batch, ((0, 0), (0, 0), (pad, pad), (pad, pad)), mode='constant')
+		im_batch = cp.pad(im_batch, ((0, 0), (20, 20), (0, 0), (0, 0)), mode='constant', constant_values=0)
+		#im_batch = cp.pad(im_batch, ((0, 0), (20, 20), (pad, pad), (pad, pad)), mode='constant')
 		image_fft = cp.fft.fftn(im_batch, axes=(-3, -2, -1))
 		del im_batch
-	
 		# Wiener deconvolution in frequency domain
 		#den = psf_fft * cp.conj(psf_fft) + beta * laplacian_fft * cp.conj(laplacian_fft)
-		#den = cp.abs(psf_fft) ** 2 + 0.01 * cp.abs(laplacian_fft_batch) ** 2
-		#deconv_fft = image_fft * cp.conj(psf_fft) / den
-		#deconvolved_images = cp.fft.ifftn(deconv_fft, axes=(-3, -2, -1)).real
 		#psf_conj = cp.conj(psf_fft)
-
 		# do all the operations in place
 		cp.multiply(image_fft, psf_conj, out=image_fft)
 		cp.true_divide(image_fft, psf_fft, out=image_fft)
+		#del psf_fft , psf_conj
 		image_fft[:] = cp.fft.ifftn(image_fft, axes=(-3, -2, -1))
-
+		#image_fft = cp.real(image_fft)
 		image_fft = image_fft.real  # This creates a new view, but still complex64
 		image_fft = cp.ascontiguousarray(image_fft, dtype=cp.float16)  # Forces in-place conversion
+		'''	
+		viewer = napari.Viewer()
+		viewer.add_image(cp.asnumpy(im_batch), name="original", scale=(1, 1, 1))
+		viewer.add_image(cp.asnumpy(image_fft), name="deconv", scale=(1, 1, 1))
+		napari.run()
+		exit()
+		'''
+		del image_fft
+		gc.collect()
 		cp.get_default_memory_pool().free_all_blocks()  # Free up memory immediately
 	del psf_fft, psf_conj
+
 	end = time.time()
 	print(f"cupy (untiled) time: {end - start:.6f} seconds")
+	#print(f"CuPy Max GPU Memory Used: {max_usage / 1e6:.2f} MB")
 	gc.collect()
 	cp.get_default_memory_pool().free_all_blocks()
 	cp.get_default_pinned_memory_pool().free_all_blocks()
-	
+	exit()
+
 	start = time.time()
 	for _ in range(n):
-		out_im = full_deconv_cupy(im__, s_=500, pad=100, psf=psfs, parameters={'method':'wiener','beta':0.001}, gpu=True, force=True)
+		out_im = full_deconv(im__, s_=500, pad=100, psf=psfs, parameters={'method':'cupy','beta':0.001}, gpu=True, force=True)
 	end = time.time()
 	print(f"cupy (tiled) time: {end - start:.6f} seconds")
 	del out_im
@@ -198,15 +264,22 @@ if __name__ == "__main__":
 	cp.get_default_pinned_memory_pool().free_all_blocks()
 	
 	start = time.time()
-	with Pool(processes=3) as pool:
+	with Pool(processes=4) as pool:
 		results = pool.starmap(full_deconv_cupy_map, items)  # Use starmap for argument unpacking
+	#tasks = [(im, psfs, i % 6) for i, (im, psfs) in enumerate(items)]
+	#with ThreadPoolExecutor(max_workers=6) as executor:
+		#results = list(executor.map(lambda args: full_deconv_cupy_map(*args), items))
+	#	results = list(executor.map(lambda args: full_deconv_cupy_map(*args), tasks))
+
+
 	end = time.time()
 	print(f"cupy (tiled parallel) time: {end - start:.6f} seconds")
 	del results
 	gc.collect()
 	cp.get_default_memory_pool().free_all_blocks()
 	cp.get_default_pinned_memory_pool().free_all_blocks()
-	
+	cp.cuda.Device(1).synchronize()
+		
 	start = time.time()
 	for _ in range(n):
 		out_im = full_deconv(im__, s_=500, pad=100, psf=psfs, parameters={'method':'wiener','beta':0.001}, gpu=True, force=True)
@@ -218,13 +291,12 @@ if __name__ == "__main__":
 	torch.cuda.ipc_collect()  # Helps with memory fragmentation
 
 	start = time.time()
-	with Pool(processes=2) as pool:
+	with Pool(processes=4) as pool:
 		results = pool.starmap(full_deconv_map, items)  # Use starmap for argument unpacking
 	end = time.time()
 	print(f"torch (tiled parallel) time: {end - start:.6f} seconds")
 	exit()
 
-	import napari
 	viewer = napari.Viewer()
 	viewer.add_image(cp.asnumpy(im_batch), name="original", scale=(1, 1, 1))
 	viewer.add_image(cp.asnumpy(deconvolved_images), name="deconv", scale=(1, 1, 1))
