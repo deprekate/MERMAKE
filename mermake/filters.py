@@ -65,7 +65,6 @@ def wiener_deconvolve(image, psf, beta=0.001, pad=0):
 	psf_fft = xp.fft.fftn(psf_pad)
 	laplacian_fft = xp.fft.fftn(laplacian_3d_like(image_pad))
 	# Wiener filtering with Laplacian regularization
-	
 	# THIS IS ALL POORLY OPTIMIZED CODE
 	#den = psf_fft * xp.conj(psf_fft) + beta * laplacian_fft * xp.conj(laplacian_fft)
 	#deconv_fft = image_fft * xp.conj(psf_fft) / den
@@ -73,6 +72,7 @@ def wiener_deconvolve(image, psf, beta=0.001, pad=0):
 	#image_pad[:] = xp.real(xp.fft.ifftn(deconv_fft))
 	
 	# THIS IS ALL INPLACE TESTING STUFF
+	'''
 	psf_conj = xp.conj(psf_fft)
 	xp.multiply(image_fft, psf_conj, out=image_fft)
 	xp.multiply(psf_fft, psf_conj, out=psf_fft)
@@ -80,6 +80,17 @@ def wiener_deconvolve(image, psf, beta=0.001, pad=0):
 	xp.multiply(laplacian_fft, beta, out=laplacian_fft)
 	xp.add(psf_fft, laplacian_fft, out=psf_fft)
 	xp.true_divide(image_fft, psf_fft, out=image_fft)
+	image_fft[:] = xp.fft.ifftn(image_fft)
+	image_pad[:] = xp.real(image_fft)
+	'''
+	psf_conj = xp.conj(psf_fft)
+	xp.multiply(psf_fft, psf_conj, out=psf_fft)
+	xp.multiply(laplacian_fft, laplacian_fft.conj(), out=laplacian_fft)
+	xp.multiply(laplacian_fft, beta, out=laplacian_fft)
+	xp.add(psf_fft, laplacian_fft, out=psf_fft)
+	xp.true_divide(psf_conj, psf_fft, out=psf_fft)
+
+	xp.multiply(image_fft, psf_fft, out=image_fft)
 	image_fft[:] = xp.fft.ifftn(image_fft)
 	image_pad[:] = xp.real(image_fft)
 	
