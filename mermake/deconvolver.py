@@ -44,11 +44,13 @@ def batch_laplacian_fft(batch_size, shape):
 	return lap_fft[None, ...]  # Add batch dimension without copying memory
 
 
+from maxima import Maxima
 
 class Deconvolver:
 	def __init__(self, psfs, zpad, tile_size = None, overlap = 89, beta = 0.001, xp = cp):
+		self.tile_size = tile_size
 
-		psf_stack = np.stack(list(map(center_psf, list(psfs.values()))))
+		psf_stack = np.stack(list(map(self.center_psf, list(psfs.values()))))
 		psf_stack = np.pad(psf_stack, ((0, 0), (zpad, zpad), (overlap, overlap), (overlap, overlap)), mode='constant')
 		shift = -np.array(psf_stack.shape[1:]) // 2
 		psf_stack[:] = np.roll(psf_stack, shift=shift, axis=(1,2,3))
@@ -81,25 +83,38 @@ class Deconvolver:
 			self.tile_res = xp.empty((40 , 300 + 2*overlap, 300 + 2*overlap), dtype=xp.float16)
 			self.overlap = overlap
 			self.zpad = zpad
-		self.tile_size = tile_size
 		self.xp = xp
 
+		self.maxima = Maxima()
+
 	def tile_wise(self, image):
+		xp = cp.get_array_module(image)
 		zpad = self.zpad
 		tile = self.tile
 		tile_fft = self.tile_fft
 		tile_res = self.tile_res
 		psf_fft = self.psf_fft
 		tiles = self.tiled(image)
-		#tiles = self.xp.asarray(tiles)
+		Xhf = list()
 		for z in range(len(tiles)):
 			tile[	 : zpad, :, :] = tiles[z][0:1]
 			tile[ zpad:-zpad, :, :] = tiles[z]
 			tile[-zpad:	 , :, :] = tiles[z][-1:]
 
-			tile_fft[:] = self.xp.fft.fftn(tile)
-			self.xp.multiply(tile_fft, psf_fft[z], out=tile_fft)
-			tile_res[:] = self.xp.fft.ifftn(tile_fft)[zpad:-zpad].real
+			tile_fft[:] = xp.fft.fftn(tile)
+			xp.multiply(tile_fft, psf_fft[z], out=tile_fft)
+			tile_res[:] = xp.fft.ifftn(tile_fft)[zpad:-zpad].real
+			tile_res[:] = norm_slices(tile_res)
+			Xh = self.maxima.get_local(tile_res)
+			# use old code for now
+			keep = xp.all(Xh[:,1:3] < (self.tile_size+self.overlap/2), axis=-1)
+			keep &= xp.all(Xh[:,1:3] >= self.overlap/2, axis=-1)
+			Xh = Xh[keep]
+			# I guess I need to calculate the positions, do later
+			Xh[:,1]+=0
+			Xh[:,2]+=0
+			Xhf.append(Xh)
+		return None #xp.vstack(Xhf)
 
 		#im_cupy = tiler.untile(im_cupy)
 		#untiled = cp.asnumpy(im_cupy)
@@ -167,7 +182,8 @@ class Deconvolver:
 		out = out.reshape(self.sz, self.ny * self.tile_size, self.nx * self.tile_size)
 
 		return out
-	def center_psf(psf):
+
+	def center_psf(self, psf):
 		"""
 		Inserts `psf` into a zero-padded array of `target_shape`, cropping if necessary.
 	

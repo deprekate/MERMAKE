@@ -82,7 +82,7 @@ class Maxima:
 		z, x, y = xp.where(im_dif > self.threshold)
 		
 		if len(z) == 0:
-			return xp.empty((0, 4), dtype=xp.float32)  # Return empty CuPy array
+			return xp.empty((0, 8), dtype=xp.float32)  # Return empty CuPy array
 	
 		zmax, xmax, ymax = im_dif.shape
 	
@@ -97,7 +97,7 @@ class Maxima:
 		z, x, y = z[keep], x[keep], y[keep]
 		
 		if len(z) == 0:
-			return xp.empty((0, 4), dtype=xp.float32)
+			return xp.empty((0, 8), dtype=xp.float32)
 	
 		h = im_dif[z, x, y]
 	
