@@ -77,7 +77,7 @@ class Maxima:
 		a_[bad] = -a_[bad]
 		return a_
 
-	def get_local(self, im_dif, im_raw=None):
+	def apply(self, im_dif, im_raw=None):
 		xp = cp.get_array_module(im_dif)
 		im_dif = im_dif.astype(xp.float32)
 		z, x, y = xp.where(im_dif > self.threshold)

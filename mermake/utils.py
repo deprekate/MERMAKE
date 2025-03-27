@@ -124,7 +124,7 @@ def count_hybs(args):
 	print(num)
 	print(args)
 
-def norm_slices(image, ksize=50):
+def norm_image(image, ksize=50):
 	xp = cp.get_array_module(image)
 	if xp == np:
 		from scipy.ndimage import convolve

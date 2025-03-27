@@ -8,6 +8,7 @@ from itertools import zip_longest, chain, repeat
 import cupy as cp
 import numpy as np
 
+from utils import norm_image
 
 def repeat_last(iterable):
     it = iter(iterable)
@@ -110,11 +111,14 @@ class Deconvolver:
 			tile_res[:] = xp.fft.ifftn(tile_fft)[zpad:-zpad].real
 			yield x,y,tile_res
 	
-	def apply(self, image):
+	def apply(self, image, norm=False):
 		xp = cp.get_array_module(image)
 		tiles = list()
 		for x,y,tile in self.tile_wise(image):
-			tiles.append(tile.copy())
+			if norm:
+				tiles.append(norm_image(tile.copy()))
+			else:
+				tiles.append(tile.copy())
 		tiles = xp.stack(tiles)
 		return self.untiled(tiles)
 
