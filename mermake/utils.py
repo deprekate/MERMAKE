@@ -9,6 +9,7 @@ import xml.etree.ElementTree as ET
 from sklearn.cluster import KMeans
 
 import numpy as np
+import cupy as cp
 from sklearn.cluster import KMeans
 
 class Config:
@@ -123,6 +124,22 @@ def count_hybs(args):
 	print(num)
 	print(args)
 
+def norm_slices(image, ksize=50):
+	xp = cp.get_array_module(image)
+	if xp == np:
+		from scipy.ndimage import convolve
+	else:
+		from cupyx.scipy.ndimage import convolve
+
+	image = image.astype(xp.float32)  # Ensure correct type
+	kernel = xp.ones((ksize, ksize), dtype=xp.float32) / (ksize * ksize)
+
+	# Apply blur to each slice in parallel without looping in Python
+	#padded = np.pad(image, ((1,0) ,(1, 0), (1, 0)), mode='reflect')
+	#blurred = convolve(padded, kernel[None, :, :], mode="constant")
+	#return image - blurred [0:image.shape[0], 0:image.shape[1], 0:image.shape[2]]
+	blurred = convolve(image, kernel[None, :, :], mode="constant")
+	return image - blurred
 	
 
 if __name__ == "__main__":

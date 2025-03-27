@@ -39,9 +39,9 @@ class Maxima:
 		self.threshold = threshold
 		# Vectorized offsets
 		d1, d2, d3 = xp.meshgrid(
-			cp.arange(-delta, delta + 1),
-			cp.arange(-delta, delta + 1),
-			cp.arange(-delta, delta + 1),
+			xp.arange(-delta, delta + 1),
+			xp.arange(-delta, delta + 1),
+			xp.arange(-delta, delta + 1),
 			indexing='ij'
 		)
 		mask = (d1 ** 2 + d2 ** 2 + d3 ** 2) <= (delta ** 2)
@@ -51,9 +51,9 @@ class Maxima:
 	
 		if delta_fit > 0:
 			d1, d2, d3 = xp.meshgrid(
-					cp.arange(-delta_fit, delta_fit + 1),
-					cp.arange(-delta_fit, delta_fit + 1),
-					cp.arange(-delta_fit, delta_fit + 1),
+					xp.arange(-delta_fit, delta_fit + 1),
+					xp.arange(-delta_fit, delta_fit + 1),
+					xp.arange(-delta_fit, delta_fit + 1),
 					indexing='ij'
 				)
 			mask = (d1 ** 2 + d2 ** 2 + d3 ** 2) <= (delta_fit ** 2)
@@ -69,7 +69,7 @@ class Maxima:
 		self.delta_fit = delta_fit
 
 	def get_ind(self, a, amax):
-		# modify x_ to be within image
+		# modify a_ to be within image
 		a_ = a.copy()
 		bad = a_ >= amax
 		a_[bad] = amax - a_[bad] - 1
@@ -79,13 +79,13 @@ class Maxima:
 
 	def get_local(self, im_dif, im_raw=None):
 		xp = cp.get_array_module(im_dif)
+		im_dif = im_dif.astype(xp.float32)
 		z, x, y = xp.where(im_dif > self.threshold)
-		
 		if len(z) == 0:
 			return xp.empty((0, 8), dtype=xp.float32)  # Return empty CuPy array
 	
 		zmax, xmax, ymax = im_dif.shape
-	
+
 		# Compute indices for neighborhood check
 		z_ = self.get_ind(z[:, None] + self.d1, zmax)
 		x_ = self.get_ind(x[:, None] + self.d2, xmax)
@@ -100,9 +100,8 @@ class Maxima:
 			return xp.empty((0, 8), dtype=xp.float32)
 	
 		h = im_dif[z, x, y]
-	
+
 		if self.delta_fit > 0:
-	
 			im_centers0 = (z[:, None] + self.dd1).T
 			im_centers1 = (x[:, None] + self.dd2).T
 			im_centers2 = (y[:, None] + self.dd3).T
@@ -118,7 +117,7 @@ class Maxima:
 				habs = im_raw[z, x, y]
 			else:
 				im_centers4 = im_dif[z_, x_, y_]
-				habs = xp.zeros_like(x, dtype=xp.float32)
+				habs = xp.zeros_like(x)
 	
 			bk = xp.min(im_centers3,0)
 	
@@ -127,7 +126,7 @@ class Maxima:
 	
 			hn = xp.mean(((im_centers3-im_centers3.mean(0))/im_centers3.std(0))*self.norm_G, 0)
 			a = xp.mean(((im_centers4-im_centers4.mean(0))/im_centers4.std(0))*self.norm_G, 0)
-	
+
 			# Compute weighted centroids
 			zc = xp.sum(im_centers0 * im_centers3, axis=0)
 			xc = xp.sum(im_centers1 * im_centers3, axis=0)

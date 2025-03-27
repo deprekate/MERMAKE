@@ -3,24 +3,25 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "1"  # Change "1" to the desired GPU ID
 
 import time
 import gc
+from itertools import zip_longest, chain, repeat
+
 import cupy as cp
 import numpy as np
 
 
-def norm_slices(image, ksize=50):
-	xp = cp.get_array_module(image)
-	if xp == np:
-		from scipy.ndimage import convolve
-	else:
-		from cupyx.scipy.ndimage import convolve
+def repeat_last(iterable):
+    it = iter(iterable)
+    try:
+        last = next(it)  # Get the first element
+    except StopIteration:
+        return  # Empty iterable, nothing to repeat
+    yield last
+    for item in it:
+        yield item
+        last = item  # Update last element
+    while True:
+        yield last  # Repeat last element indefinitely
 
-	image = image.astype(xp.float32)  # Ensure correct type
-	kernel = xp.ones((ksize, ksize), dtype=xp.float32) / (ksize * ksize)
-
-	# Apply blur to each slice in parallel without looping in Python
-	blurred = convolve(image, kernel[None, :, :], mode="constant")
-
-	return image - blurred  # Equivalent to original list comprehension
 
 def laplacian_3d(shape):
 	"""Create a 3D Laplacian kernel for a given shape."""
@@ -44,16 +45,24 @@ def batch_laplacian_fft(batch_size, shape):
 	return lap_fft[None, ...]  # Add batch dimension without copying memory
 
 
-from maxima import Maxima
-
 class Deconvolver:
-	def __init__(self, psfs, zpad, tile_size = None, overlap = 89, beta = 0.001, xp = cp):
+	def __init__(self, psfs, image_shape, tile_size=300, zpad=0, overlap = 89, beta = 0.001, xp = cp):
 		self.tile_size = tile_size
+		self.tile_height = image_shape[0]
 
-		psf_stack = np.stack(list(map(self.center_psf, list(psfs.values()))))
+		if len(psfs) == 1:
+			# old single psf method
+			batch_size = (image_shape[-1] // tile_size) ** 2
+			psf_stack = self.center_psf(next(iter(psfs.values())))
+			psf_stack = np.broadcast_to(psf_stack[None, ...], (batch_size, *psf_stack.shape))
+		else:
+			# new method using multiple psfs taken across fov
+			psf_stack = np.stack(list(map(self.center_psf, list(psfs.values()))))
 		psf_stack = np.pad(psf_stack, ((0, 0), (zpad, zpad), (overlap, overlap), (overlap, overlap)), mode='constant')
 		shift = -np.array(psf_stack.shape[1:]) // 2
 		psf_stack[:] = np.roll(psf_stack, shift=shift, axis=(1,2,3))
+		print(psf_stack.shape)
+
 
 		psf_fft = xp.empty_like(psf_stack, dtype=xp.complex64)
 		# have to do this by zslice due to gpu ram ~ 48GB
@@ -69,55 +78,45 @@ class Deconvolver:
 		del laplacian_fft, psf_conj, psf_stack
 		self.psf_fft = psf_fft
 		gc.collect()  # Standard Python garbage collection
-		try:
+		if xp == cp:
 			cp._default_memory_pool.free_all_blocks()  # Free standard GPU memory pool
 			cp._default_pinned_memory_pool.free_all_blocks()  # Free pinned memory pool
 			cp.cuda.runtime.deviceSynchronize()  # Ensure all operations are completed
-		except Exception as e:
-			print(f"Warning: Failed to free GPU memory: {e}")
 
+		# Preallocate tile arrays
 		if tile_size:
-			# Preallocate tile arrays
-			self.tile = xp.empty((40 + 2 * zpad, 300 + 2*overlap, 300 + 2*overlap), dtype=xp.float16)
-			self.tile_fft = xp.empty_like(self.tile, dtype=xp.complex64)
-			self.tile_res = xp.empty((40 , 300 + 2*overlap, 300 + 2*overlap), dtype=xp.float16)
-			self.overlap = overlap
-			self.zpad = zpad
+			shape = (tile_size + 2*overlap, tile_size + 2*overlap)
+			self.tile_pad = xp.empty((2*zpad + self.tile_height, *shape), dtype=xp.float32)
+			self.tile_res = xp.empty((         self.tile_height, *shape), dtype=xp.float32)
+			self.tile_fft = xp.empty_like(self.tile_pad, dtype=xp.complex64)
+		self.overlap = overlap
+		self.zpad = zpad
 		self.xp = xp
 
-		self.maxima = Maxima()
-
-	def tile_wise(self, image):
+	def tile_wise(self, image, im_raw=None):
 		xp = cp.get_array_module(image)
 		zpad = self.zpad
-		tile = self.tile
+		tile_pad = self.tile_pad
 		tile_fft = self.tile_fft
 		tile_res = self.tile_res
-		psf_fft = self.psf_fft
-		tiles = self.tiled(image)
-		Xhf = list()
-		for z in range(len(tiles)):
-			tile[	 : zpad, :, :] = tiles[z][0:1]
-			tile[ zpad:-zpad, :, :] = tiles[z]
-			tile[-zpad:	 , :, :] = tiles[z][-1:]
+		for psf_fft, (x,y,tile) in zip(self.psf_fft, self.tiled(image)):
+			#tile_pad[     : zpad, :, :] = tile[0:1]
+			#tile_pad[ zpad:-zpad, :, :] = tile
+			#tile_pad[-zpad:     , :, :] = tile[-1:]
+			tile_pad[:] = xp.pad(tile, ((zpad, zpad), (0,0), (0,0)), mode='reflect')
 
-			tile_fft[:] = xp.fft.fftn(tile)
-			xp.multiply(tile_fft, psf_fft[z], out=tile_fft)
+			tile_fft[:] = xp.fft.fftn(tile_pad)
+			xp.multiply(tile_fft, psf_fft, out=tile_fft)
 			tile_res[:] = xp.fft.ifftn(tile_fft)[zpad:-zpad].real
-			tile_res[:] = norm_slices(tile_res)
-			Xh = self.maxima.get_local(tile_res)
-			# use old code for now
-			keep = xp.all(Xh[:,1:3] < (self.tile_size+self.overlap/2), axis=-1)
-			keep &= xp.all(Xh[:,1:3] >= self.overlap/2, axis=-1)
-			Xh = Xh[keep]
-			# I guess I need to calculate the positions, do later
-			Xh[:,1]+=0
-			Xh[:,2]+=0
-			Xhf.append(Xh)
-		return None #xp.vstack(Xhf)
-
-		#im_cupy = tiler.untile(im_cupy)
-		#untiled = cp.asnumpy(im_cupy)
+			yield x,y,tile_res
+	
+	def apply(self, image):
+		xp = cp.get_array_module(image)
+		tiles = list()
+		for x,y,tile in self.tile_wise(image):
+			tiles.append(tile.copy())
+		tiles = xp.stack(tiles)
+		return self.untiled(tiles)
 
 	def tiled(self, image):
 		"""
@@ -138,20 +137,13 @@ class Deconvolver:
 		self.ny = int(xp.ceil(sy / self.tile_size))
 
 		# Pad the image
-		padded = xp.pad(image, ((0, 0), (self.overlap, self.overlap), (self.overlap, self.overlap)), mode='edge')
-
-		# Pre-allocate output array for better performance
-		num_tiles = self.nx * self.ny
-		tiles = xp.empty((num_tiles, sz, self.tile_size+2*self.overlap, self.tile_size+2*self.overlap), dtype=image.dtype)
+		padded = xp.pad(image, ((0, 0), (self.overlap, self.overlap), (self.overlap, self.overlap)), mode='reflect')
 
 		# Extract tiles
-		idx = 0
-		for y in range(0, sy, self.tile_size):
-			for x in range(0, sx, self.tile_size):
-				tiles[idx] = padded[:, y:y+self.tile_size+2*self.overlap, x:x+self.tile_size+2*self.overlap]
-				idx += 1
+		for x in range(0, sx, self.tile_size):
+			for y in range(0, sy, self.tile_size):
+				yield x,y,padded[:, x:x+self.tile_size+2*self.overlap, y:y+self.tile_size+2*self.overlap]
 
-		return tiles
 
 	def untiled(self, image):
 		"""
@@ -194,9 +186,9 @@ class Deconvolver:
 		Returns:
 		- ndarray: The centered PSF inside a zero-padded/cropped array.
 		"""
-		target_shape = (40, self.tile_size, self.tile_size)
 		xp = cp.get_array_module(psf)  # Handle NumPy or CuPy
-		target_shape = xp.array(target_shape)
+
+		target_shape = xp.array([self.tile_height, self.tile_size, self.tile_size])
 		psf_shape = xp.array(psf.shape)
 	
 		psff = xp.zeros(target_shape, dtype=psf.dtype)  # Use same dtype for consistency
@@ -216,3 +208,10 @@ class Deconvolver:
 	
 		return psff
 
+def full_deconv(image, psfs, tile_size=300, zpad = None, overlap = 89, beta = 0.001):
+	xp = cp.get_array_module(image)
+	shape = image.shape
+	if zpad is None:
+		zpad = shape[0]
+	deconvolver = Deconvolver(psfs, image_shape=shape, zpad=zpad, tile_size=tile_size, overlap=overlap, beta=beta)
+	return deconvolver.apply(image)
