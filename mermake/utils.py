@@ -138,7 +138,7 @@ def norm_image(image, ksize=50):
 	#padded = np.pad(image, ((1,0) ,(1, 0), (1, 0)), mode='reflect')
 	#blurred = convolve(padded, kernel[None, :, :], mode="constant")
 	#return image - blurred [0:image.shape[0], 0:image.shape[1], 0:image.shape[2]]
-	blurred = convolve(image, kernel[None, :, :], mode="constant")
+	blurred = convolve(image, kernel[None, :, :], mode="reflect")
 	return image - blurred
 	
 

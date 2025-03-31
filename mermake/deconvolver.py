@@ -8,8 +8,6 @@ from itertools import zip_longest, chain, repeat
 import cupy as cp
 import numpy as np
 
-from utils import norm_image
-
 def repeat_last(iterable):
     it = iter(iterable)
     try:
@@ -62,8 +60,6 @@ class Deconvolver:
 		psf_stack = np.pad(psf_stack, ((0, 0), (zpad, zpad), (overlap, overlap), (overlap, overlap)), mode='constant')
 		shift = -np.array(psf_stack.shape[1:]) // 2
 		psf_stack[:] = np.roll(psf_stack, shift=shift, axis=(1,2,3))
-		print(psf_stack.shape)
-
 
 		psf_fft = xp.empty_like(psf_stack, dtype=xp.complex64)
 		# have to do this by zslice due to gpu ram ~ 48GB
@@ -111,14 +107,11 @@ class Deconvolver:
 			tile_res[:] = xp.fft.ifftn(tile_fft)[zpad:-zpad].real
 			yield x,y,tile_res
 	
-	def apply(self, image, norm=False):
+	def apply(self, image):
 		xp = cp.get_array_module(image)
 		tiles = list()
 		for x,y,tile in self.tile_wise(image):
-			if norm:
-				tiles.append(norm_image(tile.copy()))
-			else:
-				tiles.append(tile.copy())
+			tiles.append(tile.copy())
 		tiles = xp.stack(tiles)
 		return self.untiled(tiles)
 
