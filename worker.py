@@ -153,7 +153,6 @@ if __name__ == "__main__":
 	for im in image_generator(hybs, fovs):
 		cim[...] = cp.asarray(im, dtype=cp.float32)
 		cim /= im_med[:, cp.newaxis, :, :] 
-		key = list(psfs.keys())[31]
 		pars = {'method':'wiener','beta':0.0001}
 		for icol in [0,1,2]:
 			Xhf = list()
