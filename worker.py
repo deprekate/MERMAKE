@@ -153,7 +153,6 @@ if __name__ == "__main__":
 	for im in image_generator(hybs, fovs):
 		cim[...] = cp.asarray(im, dtype=cp.float32)
 		cim /= im_med[:, cp.newaxis, :, :] 
-		pars = {'method':'wiener','beta':0.0001}
 		for icol in [0,1,2]:
 			Xhf = list()
 			for x,y,tile,raw in hyb_deconvolver.tile_wise(cim[icol], im_raw=True):
