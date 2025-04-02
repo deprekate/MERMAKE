@@ -13,24 +13,6 @@ from cupyx.scipy.ndimage import convolve
 import cupy as cp
 
 
-# Define the custom kernel
-where_kernel = cp.ElementwiseKernel(
-    'float32 x, float32 threshold',
-    'uint32 z, uint32 y, uint32 w',
-    '''
-    if (x > threshold) {
-        z = i;
-        y = i;
-        w = i;
-    } else {
-        z = 0;
-        y = 0;
-        w = 0;
-    }
-    ''',
-    'where_kernel'
-)
-
 class Maxima:
 	def __init__(self, threshold=2500,dic_psf=None,delta=1,delta_fit=3,sigmaZ=1,sigmaXY=1.5, xp=cp):
 		"""
@@ -83,7 +65,7 @@ class Maxima:
 
 	def get_ind(self, a, amax):
 		# modify a_ to be within image
-		a_ = a #.copy()
+		a_ = a.copy()
 		bad = a_ >= amax
 		a_[bad] = amax - a_[bad] - 1
 		bad = a_ < 0
@@ -93,28 +75,8 @@ class Maxima:
 	def apply(self, im_dif, im_raw=None):
 		xp = cp.get_array_module(im_dif)
 		im_dif = im_dif.astype(xp.float32)
-		z,x,y = xp.where(im_dif > self.threshold)
-		#z,x,y = where_uint32(im_dif > self.threshold)
-		# Apply the custom kernel
-		#z, x, y = where_kernel(im_dif, self.threshold)
 
-		# Filter out the zero values (indices where the condition was not met)
-		#z = z[z != 0]
-		#x = x[x != 0]
-		#y = y[y != 0]
-		'''
-		if True: #im_dif.shape[-1] > 2000:
-			for obj in gc.get_objects():
-				if isinstance(obj, cp.ndarray):
-					print(f"CuPy array with shape {obj.shape} and dtype {obj.dtype}", end='  ')
-					print(f"Memory usage: {obj.nbytes / 1024**2:.2f} MB")
-		'''
-		#indices = xp.argwhere(im_dif > self.threshold) #.astype(xp.uint32)
-		#z = indices[:, 0]
-		#x = indices[:, 1]
-		#y = indices[:, 2]
-		gc.collect()
-		cp.get_default_memory_pool().free_all_blocks()
+		z,x,y = xp.where(im_dif > self.threshold)
 
 		if len(z) == 0:
 			return xp.empty((0, 8), dtype=xp.float32)  # Return empty CuPy array
@@ -171,67 +133,5 @@ class Maxima:
 			Xh = xp.stack([zc, xc, yc, bk, a, habs, hn, h]).T
 		else:
 			Xh = xp.stack([z, x, y, h]).T
-	
 		return Xh
-	def apply0(self, im_dif, im_raw=None):
-		xp = cp.get_array_module(im_dif)
-		im_dif = im_dif.astype(xp.float32)
-	
-		coords = xp.asarray(xp.where(im_dif > self.threshold), dtype=xp.int32).T
-	
-		if coords.shape[0] == 0:
-			return xp.empty((0, 8), dtype=xp.float32)  # Return empty CuPy array
-	
-		zmax, xmax, ymax = im_dif.shape
-	
-		# Compute indices for neighborhood check
-		z_ = self.get_ind(coords[:, 0, None] + self.d1, zmax)
-		x_ = self.get_ind(coords[:, 1, None] + self.d2, xmax)
-		y_ = self.get_ind(coords[:, 2, None] + self.d3, ymax)
-	
-		# Get local maxima condition
-		keep = im_dif[coords[:, 0], coords[:, 1], coords[:, 2]][:, None] >= im_dif[z_, x_, y_]
-		keep = keep.all(axis=1)  # Keep only points that are local maxima
-		coords = coords[keep]  # Filter coordinates
-	
-		if coords.shape[0] == 0:
-			return xp.empty((0, 8), dtype=xp.float32)
-	
-		h = im_dif[coords[:, 0], coords[:, 1], coords[:, 2]]
-	
-		if self.delta_fit > 0:
-			im_centers0 = (coords[:, 0, None] + self.dd1).T
-			im_centers1 = (coords[:, 1, None] + self.dd2).T
-			im_centers2 = (coords[:, 2, None] + self.dd3).T
-	
-			z_ = self.get_ind(im_centers0, zmax)
-			x_ = self.get_ind(im_centers1, xmax)
-			y_ = self.get_ind(im_centers2, ymax)
-	
-			im_centers3 = im_dif[z_, x_, y_]
-	
-			if im_raw is not None:
-				im_centers4 = im_raw[z_, x_, y_]
-				habs = im_raw[coords[:, 0], coords[:, 1], coords[:, 2]]
-			else:
-				im_centers4 = im_centers3
-				habs = xp.zeros_like(coords[:, 1])
-	
-			bk = xp.min(im_centers3, axis=0)
-	
-			im_centers3 = (im_centers3 - bk) / xp.sum(im_centers3, axis=0)
-	
-			hn = xp.mean(((im_centers3 - im_centers3.mean(0)) / im_centers3.std(0)) * self.norm_G, axis=0)
-			a = xp.mean(((im_centers4 - im_centers4.mean(0)) / im_centers4.std(0)) * self.norm_G, axis=0)
-	
-			# Compute weighted centroids
-			zc = xp.sum(im_centers0 * im_centers3, axis=0)
-			xc = xp.sum(im_centers1 * im_centers3, axis=0)
-			yc = xp.sum(im_centers2 * im_centers3, axis=0)
-	
-			Xh = xp.stack([zc, xc, yc, bk, a, habs, hn, h]).T
-		else:
-			Xh = xp.stack([coords[:, 0], coords[:, 1], coords[:, 2], h]).T
-	
-		return Xh
-	
+

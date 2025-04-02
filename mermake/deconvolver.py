@@ -105,7 +105,10 @@ class Deconvolver:
 			tile_fft[:] = xp.fft.fftn(tile_pad)
 			xp.multiply(tile_fft, psf_fft, out=tile_fft)
 			tile_res[:] = xp.fft.ifftn(tile_fft)[zpad:-zpad].real
-			yield x,y,tile_res
+			if im_raw:
+				yield x,y,tile_res,tile
+			else:
+				yield x,y,tile_res
 	
 	def apply(self, image):
 		xp = cp.get_array_module(image)
