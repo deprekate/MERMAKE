@@ -15,7 +15,6 @@ from mermake.maxima import Maxima
 from mermake.deconvolver import Deconvolver
 from mermake.utils import norm_image
 from mermake.maxima_gpu import find_local_maxima
-import dask.array as da
 
 class DaskArrayWithMetadata:
 	def __init__(self, dask_array, path):
