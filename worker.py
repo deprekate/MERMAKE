@@ -148,9 +148,9 @@ if __name__ == "__main__":
 	hyb_maxima = Maxima(threshold = 3600, delta = 1, delta_fit = 3,sigmaZ = 1, sigmaXY = 1.5)	
 	dapi_maxima = Maxima(threshold = 3, delta = 5, delta_fit = 5, sigmaZ = 1, sigmaXY = 1.5)	
 
-	cim = cp.empty(shape, dtype=cp.float32)
+	cim = cp.empty(shape, dtype=cp.float16)
 	for im in image_generator(hybs, fovs):
-		cim[...] = cp.asarray(im, dtype=cp.float32)
+		cim[...] = cp.asarray(im, dtype=cp.float16)
 		cim /= im_med[:, cp.newaxis, :, :] 
 		for icol in [0,1,2]:
 			Xhf = list()
