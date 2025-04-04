@@ -8,6 +8,8 @@ def count_shared_points(array1, array2, tolerance=1e-5):
     count = np.sum(tree.query(array1, distance_upper_bound=tolerance)[0] < tolerance)
     return count
 
+if len(sys.argv) < 3:
+    raise ValueError("usage: python compare_xh.py FILE1 FILE2")
 
 xh0 = np.load(sys.argv[1])['Xh']
 print(xh0.shape)
