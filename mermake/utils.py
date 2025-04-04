@@ -1,32 +1,27 @@
 import os
 import re
-from pathlib import Path
 import glob
-from wcmatch import glob as wc
+from pathlib import Path
 from collections import Counter
-from natsort import natsorted
 import xml.etree.ElementTree as ET
-from sklearn.cluster import KMeans
 
 import numpy as np
 import cupy as cp
-from sklearn.cluster import KMeans
 
 class Config:
 	def __init__(self, args):
 		self.args = args
 		self.some_data = 'foo'
 
-
 def find_two_means(values):
+	from sklearn.cluster import KMeans
 	values = np.abs(values).reshape(-1, 1)  # Reshape for clustering
 	kmeans = KMeans(n_clusters=3, n_init="auto").fit(values)
 	cluster_centers = kmeans.cluster_centers_
 	return sorted(cluster_centers.flatten())[:2]
 
-
-from scipy.spatial import KDTree
 def estimate_step_size(points):
+	from scipy.spatial import KDTree
 	points = np.array(points)
 	# Build a KD-tree for efficient nearest neighbor search
 	tree = KDTree(points)
@@ -58,6 +53,8 @@ def get_xml_field(file, field):
 	return xml.find(f".//{field}").text
 
 def set_data(args):
+	from wcmatch import glob as wc
+	from natsort import natsorted
 	group = args.config['codebooks'][0]
 	pattern = group['hyb_pattern']
 	batch = dict()

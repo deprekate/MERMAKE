@@ -1,16 +1,7 @@
-import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"  # Change "1" to the desired GPU ID
-import time
 import gc
 
+import cupy as cp
 import numpy as np
-import cupy as cp
-
-import cupy as cp
-import cupyx
-from cupyx.scipy.ndimage import convolve
-
-import cupy as cp
 
 
 class Maxima:

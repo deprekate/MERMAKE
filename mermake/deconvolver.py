@@ -1,7 +1,3 @@
-import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"  # Change "1" to the desired GPU ID
-
-import time
 import gc
 from itertools import zip_longest, chain, repeat, cycle
 
