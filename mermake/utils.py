@@ -124,7 +124,7 @@ def count_hybs(args):
 	print(num)
 	print(args)
 
-def norm_image(image, ksize=50):
+def norm_image(image, ksize=30):
 	xp = cp.get_array_module(image)
 	if xp == np:
 		from scipy.ndimage import convolve
@@ -140,7 +140,23 @@ def norm_image(image, ksize=50):
 	#return image - blurred [0:image.shape[0], 0:image.shape[1], 0:image.shape[2]]
 	blurred = convolve(image, kernel[None, :, :], mode="reflect")
 	return image - blurred
-	
+
+# Create kernel once to reuse across norm_image calls
+class Utils:
+	def __init__(self, ksize=30, xp=cp):
+		self.ksize = ksize
+		self.kernel = cp.ones((ksize, ksize), dtype=cp.float32) / (ksize * ksize)
+		if xp == np:
+			from scipy.ndimage import convolve
+		else:
+			from cupyx.scipy.ndimage import convolve
+		self.convolve = convolve	
+	def norm_image(self, image):
+		xp = cp.get_array_module(image)
+		image = image.astype(xp.float32)  # Ensure correct type
+		blurred = self.convolve(image, self.kernel[None, :, :], mode="reflect")
+		return image - blurred
+
 
 if __name__ == "__main__":
 	# wcmatch requires ?*+@ before the () group pattern 

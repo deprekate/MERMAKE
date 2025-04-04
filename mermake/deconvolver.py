@@ -3,7 +3,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "1"  # Change "1" to the desired GPU ID
 
 import time
 import gc
-from itertools import zip_longest, chain, repeat
+from itertools import zip_longest, chain, repeat, cycle
 
 import cupy as cp
 import numpy as np
@@ -53,14 +53,14 @@ class Deconvolver:
 			# old single psf method
 			batch_size = (image_shape[-1] // tile_size) ** 2
 			psf_stack = self.center_psf(next(iter(psfs.values())))
-			psf_stack = np.broadcast_to(psf_stack[None, ...], (batch_size, *psf_stack.shape))
+			psf_stack = self.center_psf(next(iter(psfs.values())))[None, ...]
 		else:
 			# new method using multiple psfs taken across fov
 			psf_stack = np.stack(list(map(self.center_psf, list(psfs.values()))))
 		psf_stack = np.pad(psf_stack, ((0, 0), (zpad, zpad), (overlap, overlap), (overlap, overlap)), mode='constant')
 		shift = -np.array(psf_stack.shape[1:]) // 2
 		psf_stack[:] = np.roll(psf_stack, shift=shift, axis=(1,2,3))
-
+		
 		psf_fft = xp.empty_like(psf_stack, dtype=xp.complex64)
 		# have to do this by zslice due to gpu ram ~ 48GB
 		for z in range(len(psf_fft)):
@@ -73,7 +73,9 @@ class Deconvolver:
 			psf_fft[z] += laplacian_fft
 			psf_fft[z] = psf_conj / psf_fft[z]
 		del laplacian_fft, psf_conj, psf_stack
+
 		self.psf_fft = psf_fft
+		
 		gc.collect()  # Standard Python garbage collection
 		if xp == cp:
 			cp._default_memory_pool.free_all_blocks()  # Free standard GPU memory pool
@@ -96,24 +98,24 @@ class Deconvolver:
 		tile_pad = self.tile_pad
 		tile_fft = self.tile_fft
 		tile_res = self.tile_res
-		for psf_fft, (x,y,tile) in zip(self.psf_fft, self.tiled(image)):
-			#tile_pad[     : zpad, :, :] = tile[0:1]
-			#tile_pad[ zpad:-zpad, :, :] = tile
-			#tile_pad[-zpad:     , :, :] = tile[-1:]
-			tile_pad[:] = xp.pad(tile, ((zpad, zpad), (0,0), (0,0)), mode='reflect')
+		
+		# Use cycle to repeat the single PSF or iterate normally if multiple PSFs exist
+		psf_ffts = cycle(self.psf_fft) if len(self.psf_fft) == 1 else iter(self.psf_fft)
+		tiles = self.tiled(image)
+		for (x,y,tile),psf_fft in zip(tiles, psf_ffts):
+			tile_pad[     : zpad, :, :] = tile[zpad-1::-1, :, :]
+			tile_pad[ zpad:-zpad, :, :] = tile
+			tile_pad[-zpad:     , :, :] = tile[-1:-zpad-1:-1, :, :]
 
 			tile_fft[:] = xp.fft.fftn(tile_pad)
 			xp.multiply(tile_fft, psf_fft, out=tile_fft)
 			tile_res[:] = xp.fft.ifftn(tile_fft)[zpad:-zpad].real
-			if im_raw:
-				yield x,y,tile_res,tile
-			else:
-				yield x,y,tile_res
+			yield x,y,tile_res,tile
 	
 	def apply(self, image):
 		xp = cp.get_array_module(image)
 		tiles = list()
-		for x,y,tile in self.tile_wise(image):
+		for x,y,tile,_ in self.tile_wise(image):
 			tiles.append(tile.copy())
 		tiles = xp.stack(tiles)
 		return self.untiled(tiles)
