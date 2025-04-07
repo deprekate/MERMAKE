@@ -5,8 +5,8 @@ from math import prod
 local_maxima_kernel = cp.RawKernel(r'''
 extern "C" __global__
 void find_local_maxima(const float* image, float threshold, 
-					  int* z_out, int* x_out, int* y_out, unsigned int* count,
-					  int depth, int height, int width, int max_points) {
+						int* z_out, int* x_out, int* y_out, unsigned int* count,
+						int depth, int height, int width, int max_points) {
 	// Get flattened index
 	int idx = blockDim.x * blockIdx.x + threadIdx.x;
 	if (idx >= depth * height * width) {
