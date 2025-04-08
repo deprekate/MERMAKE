@@ -1,8 +1,12 @@
+import os
 import cupy as cp
+import time
 
-
-with open("maxima.cu", "r") as f:
-	kernel_code = f.read()
+# Get path relative to this file's location
+this_dir = os.path.dirname(__file__)
+cu_path = os.path.join(this_dir, "maxima.cu")
+with open(cu_path, "r") as f:
+    kernel_code = f.read()
 
 # Define the kernels separately
 local_maxima_kernel = cp.RawKernel(kernel_code, "local_maxima")
@@ -73,8 +77,10 @@ def find_local_maxima(image, threshold, delta, delta_fit, raw=None, sigmaZ=1, si
 	"""
 	# Ensure the image is in C-contiguous order for the kernel
 	if not image.flags.c_contiguous:
+		print('not contiguous')
 		image = cp.ascontiguousarray(image)
 
+	print(image.shape)
 	depth, height, width = image.shape
 	max_points = depth * height * width
 
@@ -107,7 +113,9 @@ def find_local_maxima(image, threshold, delta, delta_fit, raw=None, sigmaZ=1, si
 
 	count = cp.zeros(1, dtype=cp.uint32)
 	output = cp.zeros((num, 8), dtype=cp.float32)
-	
+	#output[:,0] = z_out	
+	#output[:,1] = x_out	
+	#output[:,2] = y_out	
 	# Create integer coordinate arrays once
 	zi, xi, yi = z_out.astype(int), x_out.astype(int), y_out.astype(int)
 
@@ -115,10 +123,10 @@ def find_local_maxima(image, threshold, delta, delta_fit, raw=None, sigmaZ=1, si
 	output[:,7] = image[zi, xi, yi]
 	output[:,5] = raw[zi, xi, yi]
 
-	#delta_fit_kernel((blocks,), (threads,), (image.ravel(), z_out, x_out, y_out, output, num, depth, height, width, delta_fit))
-
 	# Adjust blocks for the number of points found
 	blocks = (num + threads - 1) // threads
+	#delta_fit_kernel((blocks,), (threads,), (image.ravel(), z_out, x_out, y_out, output, num, depth, height, width, delta_fit))
+
 	delta_fit_cross_corr_kernel((blocks,), (threads,), (image.ravel(), raw.ravel(), z_out, x_out, y_out, output, num, depth, height, width, delta_fit, sigmaZ, sigmaXY))
 
 	return output
@@ -130,13 +138,22 @@ if __name__ == "__main__":
 	import torch
 	from ioMicro import get_local_maxfast_tensor, get_local_maxfast
 	# Example Usage
-	cim = cp.random.rand(4, 4, 4).astype(cp.float32)
+	cim = cp.random.rand(40, 300, 300).astype(cp.float32)
 	im = cp.asnumpy(cim)
-	print(cim)
+	#print(cim)
+	start = time.time()
 	local = find_local_maxima(cim, 0.97, 1, 3, raw=cim)
+	end = time.time()
+	print(f"time: {end - start:.6f} seconds")
 	print('local.shape',local.shape, flush=True)
 	print(local)
+	print(cp.min(local, axis=0))
+	print(cp.max(local, axis=0))
+	exit()
+	start = time.time()
 	old = get_local_maxfast_tensor(im,th_fit=0.97,im_raw=im,dic_psf=None,delta=1,delta_fit=3,sigmaZ=1,sigmaXY=1.5,gpu=False)
+	end = time.time()
+	print(f"time: {end - start:.6f} seconds")
 	#tem = get_local_maxfast(im,th_fit=0.97,im_raw=im,dic_psf=None,delta=1,delta_fit=3,sigmaZ=1,sigmaXY=1.5)
 	print('old.shape', old.shape)
 	print(old)

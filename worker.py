@@ -11,7 +11,8 @@ import cv2
 from mermake.utils import Utils
 from mermake.maxima import Maxima
 from mermake.deconvolver import Deconvolver
-from mermake.maxima_gpu import find_local_maxima
+#from mermake.maxima_gpu import find_local_maxima
+from mermake.maxim import find_local_maxima
 from mermake.io import image_generator, save_data, get_files
 
 
@@ -21,7 +22,7 @@ if __name__ == "__main__":
 	# this is all stuff that will eventually be replaced with a toml settings file
 	psf_file = 'psfs/dic_psf_60X_cy5_Scope5.pkl'
 	master_data_folders = ['/data/07_22_2024__PFF_PTBP1']
-	save_folder = 'output_new'
+	save_folder = 'output_old'
 	iHm = 1 ; iHM = 16
 	shape = (4,40,3000,3000)
 	items = [(set_,ifov) for set_ in ['_set1'] for ifov in range(1,11)]
@@ -52,19 +53,23 @@ if __name__ == "__main__":
 	hyb_deconvolver = Deconvolver(psfs, shape[1:], tile_size=300, overlap=89, zpad=39, beta=0.0001)
 	dapi_deconvolver = Deconvolver(psfs, shape[1:], tile_size=300, overlap=89, zpad=13, beta=0.01)
 	hyb_maxima = Maxima(threshold = 3600, delta = 1, delta_fit = 3,sigmaZ = 1, sigmaXY = 1.5)	
-	dapi_maxima = Maxima(threshold = 3, delta = 5, delta_fit = 5, sigmaZ = 1, sigmaXY = 1.5)	
+	#dapi_maxima = Maxima(threshold = 3, delta = 5, delta_fit = 5, sigmaZ = 1, sigmaXY = 1.5)	
 
 	# the save file executor to do the saving in parallel with computations
 	executor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
 
 	for cim in image_generator(hybs, fovs):
+		print(cim.path)
 		cim /= im_med[:, cp.newaxis, :, :] 
 		for icol in [0,1,2]:
 			# there is probably a better way to do the Xh stacking
 			Xhf = list()
 			for x,y,tile,raw in hyb_deconvolver.tile_wise(cim[icol], im_raw=True):
 				tile_norm = utils.norm_image(tile)
-				Xh = hyb_maxima.apply(tile_norm, im_raw=raw)
+				#Xh = hyb_maxima.apply(tile_norm, im_raw=raw)
+				Xh = find_local_maxima(tile_norm, 3600.0, 1, 3, sigmaZ = 1, sigmaXY = 1.5, raw = raw)
+				print(cp.max(Xh, axis=0))
+				exit()
 				keep = cp.all(Xh[:,1:3] < 300+89, axis=-1)
 				keep &= cp.all(Xh[:,1:3] >= 89, axis=-1)
 				Xh = Xh[keep]

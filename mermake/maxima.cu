@@ -75,7 +75,6 @@ void local_maxima(const float* image, float threshold, int delta, int delta_fit,
 extern "C" __global__
 void delta_fit(
     const float* __restrict__ image,
-    //const float* __restrict__ im_raw,  // can be NULL
     const float* __restrict__ z_out,   // (num_maxima)
     const float* __restrict__ x_out,   // (num_maxima)
     const float* __restrict__ y_out,   // (num_maxima)
@@ -96,6 +95,7 @@ void delta_fit(
     float sum_x = 0.0f;
     float sum_y = 0.0f;
     float min_val = 1e20f;
+	float count = 0.0f;
 
     for (int dz = -delta_fit; dz <= delta_fit; ++dz) {
         for (int dx = -delta_fit; dx <= delta_fit; ++dx) {
@@ -114,29 +114,36 @@ void delta_fit(
                 float val = image[zz * (X * Y) + xx * Y + yy];
 
                 if (val < min_val) min_val = val;
-                sum_val += val;
-                sum_z += dz * val;
-                sum_x += dx * val;
-                sum_y += dy * val;
+				// geometric center
+                //sum_val += val;
+                //sum_z += dz;// * val;
+                //sum_x += dx;// * val;
+                //sum_y += dy;// * val;
+				// intensity center
+				sum_val += val - min_val;  // Subtract background from each value
+				sum_z += (zz) * (val - min_val);  // Use actual coordinate (not offset)
+				sum_x += (xx) * (val - min_val);  // and subtract background
+				sum_y += (yy) * (val - min_val);
+
+				count += 1.0f;
             }
         }
     }
 
-    float center_z = (sum_val > 0) ? z0 + sum_z / sum_val : z0;
-    float center_x = (sum_val > 0) ? x0 + sum_x / sum_val : x0;
-    float center_y = (sum_val > 0) ? y0 + sum_y / sum_val : y0;
+	// geometric center
+	//float center_z = z0 + sum_z / count;
+	//float center_x = x0 + sum_x / count;
+	//float center_y = y0 + sum_y / count;
+	// intensity center
+	float center_z = (sum_val > 0) ? sum_z / sum_val : z0;
+	float center_x = (sum_val > 0) ? sum_x / sum_val : x0;
+	float center_y = (sum_val > 0) ? sum_y / sum_val : y0;
 
-	/*
-    float habs = im_raw
-        ? im_raw[z0 * (X * Y) + x0 * Y + y0]
-        : image[z0 * (X * Y) + x0 * Y + y0];
-	*/
     // Output: [zc, xc, yc, background, habs, h]
     output[idx * 8 + 0] = center_z;
     output[idx * 8 + 1] = center_x;
     output[idx * 8 + 2] = center_y;
     output[idx * 8 + 3] = min_val;
-    //output[idx * 8 + 6] = habs;
     //output[idx * 8 + 7] = image[z0 * (X * Y) + x0 * Y + y0]; // h
 }
 
@@ -205,10 +212,16 @@ void delta_fit_cross_corr(
                 norm_G[count] = norm;
 
                 // For weighted center calculation
-                sum_val += val;
-                sum_z += dz * val;
-                sum_x += dx * val;
-                sum_y += dy * val;
+				// geometric center
+                //sum_val += val;
+                //sum_z += dz * val;
+                //sum_x += dx * val;
+                //sum_y += dy * val;
+				// intensity center
+				sum_val += val - min_val;  // Subtract background from each value
+				sum_z += (zz) * (val - min_val);  // Use actual coordinate (not offset)
+				sum_x += (xx) * (val - min_val);  // and subtract background
+				sum_y += (yy) * (val - min_val);
 
                 count++;
             }
@@ -277,9 +290,14 @@ void delta_fit_cross_corr(
     a /= count;
 
     // Calculate center coordinates
-    float center_z = (sum_val > 0) ? z0 + sum_z / sum_val : z0;
-    float center_x = (sum_val > 0) ? x0 + sum_x / sum_val : x0;
-    float center_y = (sum_val > 0) ? y0 + sum_y / sum_val : y0;
+	// geometric center
+	//float center_z = (count > 0) ? z0 + sum_z / (float)count : z0;
+	//float center_x = (count > 0) ? x0 + sum_x / (float)count : x0;
+	//float center_y = (count > 0) ? y0 + sum_y / (float)count : y0;
+	// intensity center
+	float center_z = (sum_val > 0) ? sum_z / sum_val : z0;
+	float center_x = (sum_val > 0) ? sum_x / sum_val : x0;
+	float center_y = (sum_val > 0) ? sum_y / sum_val : y0;
 
     // Output: [zc, xc, yc, background, a, habs, hn, h]
     output[idx * 8 + 0] = center_z;
