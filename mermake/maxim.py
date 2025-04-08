@@ -7,6 +7,8 @@ with open("maxima.cu", "r") as f:
 # Define the kernels separately
 local_maxima_kernel = cp.RawKernel(kernel_code, "local_maxima")
 delta_fit_kernel = cp.RawKernel(kernel_code, "delta_fit")
+delta_fit_cross_corr_kernel = cp.RawKernel(kernel_code, "delta_fit_cross_corr")
+
 
 import itertools
 def compute_crosscorr_score(image, raw, z_out, x_out, y_out, delta_fit, sigmaZ, sigmaXY):
@@ -57,7 +59,7 @@ def compute_crosscorr_score(image, raw, z_out, x_out, y_out, delta_fit, sigmaZ, 
 	return hn,a
 
 
-def find_local_maxima(image, threshold, delta, delta_fit, raw=None):
+def find_local_maxima(image, threshold, delta, delta_fit, raw=None, sigmaZ=1, sigmaXY=1.5 ):
 	"""
 	Find and refine local maxima in a 3D image directly on GPU, including delta fitting.
 	
@@ -85,14 +87,20 @@ def find_local_maxima(image, threshold, delta, delta_fit, raw=None):
 	# Set up kernel parameters
 	threads = 256
 	blocks = (max_points + threads - 1) // threads
-
+	
+	threshold = cp.float32(threshold)
+	sigmaZ = cp.float32(sigmaZ)
+	sigmaXY = cp.float32(sigmaXY)
 	# Call the kernel
 	local_maxima_kernel((blocks,), (threads,), 
-					(image.ravel(), cp.float32(threshold), delta, delta_fit,
+					(image.ravel(), threshold, delta, delta_fit,
 					 z_out, x_out, y_out, count,
 					 depth, height, width, max_points))
 	cp.cuda.Device().synchronize()
 	num = int(count.get()[0])
+	if num == 0:
+		# Return empty result if no local maxima found
+		return cp.zeros((0, 8), dtype=cp.float32)
 	z_out = z_out[:num]
 	x_out = x_out[:num]
 	y_out = y_out[:num]
@@ -100,22 +108,20 @@ def find_local_maxima(image, threshold, delta, delta_fit, raw=None):
 	count = cp.zeros(1, dtype=cp.uint32)
 	output = cp.zeros((num, 8), dtype=cp.float32)
 	
-	indices = z_out[:num].astype(int) * (height * width) + x_out[:num].astype(int) * width + y_out[:num].astype(int)
-	output[:,7] = image.ravel()[indices]
-	output[:,5] = raw.ravel()[indices]
-	print(cp.stack([z_out, x_out, y_out], axis=1))
+	# Create integer coordinate arrays once
+	zi, xi, yi = z_out.astype(int), x_out.astype(int), y_out.astype(int)
 
-	delta_fit_kernel((blocks,), (threads,), (image.ravel(), z_out, x_out, y_out, output, num, depth, height, width, delta_fit))
+	# Use them for both indexing operations
+	output[:,7] = image[zi, xi, yi]
+	output[:,5] = raw[zi, xi, yi]
 
-	'''
-	hn,a = compute_crosscorr_score(image, raw, z_out, x_out, y_out, delta_fit=delta_fit, sigmaZ=1.0, sigmaXY=1.5)
-	output[:,4] = hn
-	output[:,6] = a
-	'''
+	#delta_fit_kernel((blocks,), (threads,), (image.ravel(), z_out, x_out, y_out, output, num, depth, height, width, delta_fit))
+
+	# Adjust blocks for the number of points found
+	blocks = (num + threads - 1) // threads
+	delta_fit_cross_corr_kernel((blocks,), (threads,), (image.ravel(), raw.ravel(), z_out, x_out, y_out, output, num, depth, height, width, delta_fit, sigmaZ, sigmaXY))
+
 	return output
-	#num = int(count.get()[0])
-	#coords = cp.stack([z_out[:num], x_out[:num], y_out[:num]], axis=1)
-	#return coords
 
 
 if __name__ == "__main__":
@@ -124,13 +130,13 @@ if __name__ == "__main__":
 	import torch
 	from ioMicro import get_local_maxfast_tensor, get_local_maxfast
 	# Example Usage
-	cim = cp.random.rand(40, 3000, 3000).astype(cp.float32)
+	cim = cp.random.rand(4, 4, 4).astype(cp.float32)
 	im = cp.asnumpy(cim)
 	print(cim)
 	local = find_local_maxima(cim, 0.97, 1, 3, raw=cim)
-	print(local.shape)
+	print('local.shape',local.shape, flush=True)
 	print(local)
-	tem = get_local_maxfast_tensor(im,th_fit=0.97,im_raw=im,dic_psf=None,delta=1,delta_fit=3,sigmaZ=1,sigmaXY=1.5,gpu=False)
+	old = get_local_maxfast_tensor(im,th_fit=0.97,im_raw=im,dic_psf=None,delta=1,delta_fit=3,sigmaZ=1,sigmaXY=1.5,gpu=False)
 	#tem = get_local_maxfast(im,th_fit=0.97,im_raw=im,dic_psf=None,delta=1,delta_fit=3,sigmaZ=1,sigmaXY=1.5)
-	print(tem.shape)
-	print(tem)
+	print('old.shape', old.shape)
+	print(old)
