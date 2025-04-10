@@ -40,6 +40,8 @@ def read_im(path,return_pos=False):
 		nzs = (shape[0]//nchannels)*nchannels
 		image = image[:nzs].reshape([shape[0]//nchannels,nchannels,shape[-2],shape[-1]])
 		image = image.swapaxes(0,1)
+	if image.dtype == np.uint8:
+		image = image.astype(np.float32)**2
 	#image = DaskArrayWithMetadata(image, path)
 	if return_pos:
 		return image,x,y
