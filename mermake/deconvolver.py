@@ -2,20 +2,21 @@ import gc
 from itertools import zip_longest, chain, repeat, cycle
 
 import cupy as cp
+cp.cuda.set_allocator(None)  # Disable CuPy memory pool
 import numpy as np
 
 def repeat_last(iterable):
-    it = iter(iterable)
-    try:
-        last = next(it)  # Get the first element
-    except StopIteration:
-        return  # Empty iterable, nothing to repeat
-    yield last
-    for item in it:
-        yield item
-        last = item  # Update last element
-    while True:
-        yield last  # Repeat last element indefinitely
+	it = iter(iterable)
+	try:
+		last = next(it)  # Get the first element
+	except StopIteration:
+		return  # Empty iterable, nothing to repeat
+	yield last
+	for item in it:
+		yield item
+		last = item  # Update last element
+	while True:
+		yield last  # Repeat last element indefinitely
 
 
 def laplacian_3d(shape):
@@ -82,65 +83,84 @@ class Deconvolver:
 		if tile_size:
 			shape = (tile_size + 2*overlap, tile_size + 2*overlap)
 			self.tile_pad = xp.empty((2*zpad + self.tile_height, *shape), dtype=xp.float32)
-			self.tile_res = xp.empty((         self.tile_height, *shape), dtype=xp.float32)
+			self.tile_res = xp.empty((		 self.tile_height, *shape), dtype=xp.float32)
 			self.tile_fft = xp.empty_like(self.tile_pad, dtype=xp.complex64)
 		self.overlap = overlap
 		self.zpad = zpad
 		self.xp = xp
 
-	def tile_wise(self, image, im_raw=None):
+	def tile_wise(self, image, flat_field=None):
 		xp = cp.get_array_module(image)
 		zpad = self.zpad
 		tile_pad = self.tile_pad
 		tile_fft = self.tile_fft
 		tile_res = self.tile_res
-		
+	
 		# Use cycle to repeat the single PSF or iterate normally if multiple PSFs exist
 		psf_ffts = cycle(self.psf_fft) if len(self.psf_fft) == 1 else iter(self.psf_fft)
 		tiles = self.tiled(image)
-		for (x,y,tile),psf_fft in zip(tiles, psf_ffts):
-			tile_pad[     : zpad, :, :] = tile[zpad-1::-1, :, :]
+		flats = self.tiled(flat_field[np.newaxis])
+		for (x,y,tile),(_,_,flat),psf_fft in zip(tiles, flats, psf_ffts):
+		#for (x,y,tile),psf_fft in zip(tiles, psf_ffts):
+			tile_pad[	 : zpad, :, :] = tile[zpad-1::-1, :, :]
 			tile_pad[ zpad:-zpad, :, :] = tile
-			tile_pad[-zpad:     , :, :] = tile[-1:-zpad-1:-1, :, :]
+			tile_pad[-zpad:	 , :, :] = tile[-1:-zpad-1:-1, :, :]
+
+			# flat field correct
+			tile_pad[zpad:-zpad] /= flat
 
 			tile_fft[:] = xp.fft.fftn(tile_pad)
 			xp.multiply(tile_fft, psf_fft, out=tile_fft)
-			tile_res[:] = xp.fft.ifftn(tile_fft)[zpad:-zpad].real
+			tile_res[:] = xp.fft.ifftn(tile_fft)[zpad:-zpad,:,:].real
 			yield x,y,tile_res,tile
-	
+
 	def apply(self, image):
 		xp = cp.get_array_module(image)
-		tiles = list()
-		for x,y,tile,_ in self.tile_wise(image):
-			tiles.append(tile.copy())
-		tiles = xp.stack(tiles)
-		return self.untiled(tiles)
+		output = xp.empty_like(image, dtype=xp.float32)
+		ones = xp.ones(image[:,0,...].shape)
+		for x,y,tile,_ in self.tile_wise(image, flat_field = ones ):
+			output[:,x:x+self.tile_size,y:y+self.tile_size] = tile[:,self.overlap:-self.overlap,self.overlap:-self.overlap]
+		return output
 
 	def tiled(self, image):
 		"""
-		Tile an image into overlapping tiles.
+		Yield tiles of the image with reflected padding, computed on-the-fly.
 		"""
 		xp = cp.get_array_module(image)
-
-		# Get image dimensions
 		sz, sx, sy = image.shape
-
-		# Store for later use in untile
 		self.sz = sz
 		self.sx = sx
 		self.sy = sy
-
-		# Calculate number of tiles in each dimension
 		self.nx = int(xp.ceil(sx / self.tile_size))
 		self.ny = int(xp.ceil(sy / self.tile_size))
-
-		# Pad the image
-		padded = xp.pad(image, ((0, 0), (self.overlap, self.overlap), (self.overlap, self.overlap)), mode='reflect')
-
-		# Extract tiles
+	
 		for x in range(0, sx, self.tile_size):
 			for y in range(0, sy, self.tile_size):
-				yield x,y,padded[:, x:x+self.tile_size+2*self.overlap, y:y+self.tile_size+2*self.overlap]
+				# Compute bounds with overlap
+				x_start = max(x - self.overlap, 0)
+				y_start = max(y - self.overlap, 0)
+				x_end = min(x + self.tile_size + self.overlap, sx)
+				y_end = min(y + self.tile_size + self.overlap, sy)
+	
+				# Extract tile region
+				tile = image[:, x_start:x_end, y_start:y_end]
+	
+				# Pad if the tile is near an edge
+				pad_left   = self.overlap - (x - x_start)
+				pad_right  = (x + self.tile_size + self.overlap) - x_end
+				pad_top	= self.overlap - (y - y_start)
+				pad_bottom = (y + self.tile_size + self.overlap) - y_end
+	
+				pad_width = (
+					(0, 0),  # no padding on Z
+					(pad_left, pad_right),
+					(pad_top, pad_bottom)
+				)
+				if any(p > 0 for p in (pad_left, pad_right, pad_top, pad_bottom)):
+					tile = xp.pad(tile, pad_width, mode='reflect')
+
+				yield x, y, tile
+
 
 
 	def untiled(self, image):

@@ -201,7 +201,7 @@ void delta_fit_cross_corr(
                 int idx_img = zz * (X * Y) + xx * Y + yy;
                 float val = image[idx_img];
                 sample_vals[count] = val;
-                raw_vals[count] = raw[idx_img];
+				raw_vals[count] = raw[idx_img];
 
                 if (val < min_val) min_val = val;
 
@@ -227,7 +227,6 @@ void delta_fit_cross_corr(
             }
         }
     }
-
     if (count == 0) return;  // Safety check
 
     // Step 2: Calculate mean and std of Gaussian weights
@@ -274,15 +273,13 @@ void delta_fit_cross_corr(
     var_raw /= count;
     float std_sample = sqrtf(var_sample);
     float std_raw = sqrtf(var_raw);
-
     // Step 4: Calculate normalized cross-correlation
     float hn = 0.0f;  // Cross-correlation with image
     float a = 0.0f;   // Cross-correlation with raw
-
-    for (int i = 0; i < count; i++) {
+    
+	for (int i = 0; i < count; i++) {
         float norm_sample = (sample_vals[i] - mean_sample) / std_sample;
         float norm_raw = (raw_vals[i] - mean_raw) / std_raw;
-
         hn += norm_sample * norm_G[i];
         a += norm_raw * norm_G[i];
     }
@@ -304,7 +301,8 @@ void delta_fit_cross_corr(
     output[idx * 8 + 1] = center_x;
     output[idx * 8 + 2] = center_y;
     output[idx * 8 + 3] = min_val;  // background
-    output[idx * 8 + 4] = a;        // Cross-correlation with raw
+    //output[idx * 8 + 4] = a;        // Cross-correlation with raw
+    //output[idx * 8 + 4] = min_val;        // Cross-correlation with raw
     // output[idx * 8 + 5] = already set in Python (habs)
     output[idx * 8 + 6] = hn;       // Cross-correlation with image
     // output[idx * 8 + 7] = already set in Python (h)

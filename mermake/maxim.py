@@ -6,7 +6,7 @@ import time
 this_dir = os.path.dirname(__file__)
 cu_path = os.path.join(this_dir, "maxima.cu")
 with open(cu_path, "r") as f:
-    kernel_code = f.read()
+	kernel_code = f.read()
 
 # Define the kernels separately
 local_maxima_kernel = cp.RawKernel(kernel_code, "local_maxima")
@@ -80,7 +80,6 @@ def find_local_maxima(image, threshold, delta, delta_fit, raw=None, sigmaZ=1, si
 		print('not contiguous')
 		image = cp.ascontiguousarray(image)
 
-	print(image.shape)
 	depth, height, width = image.shape
 	max_points = depth * height * width
 
@@ -113,22 +112,27 @@ def find_local_maxima(image, threshold, delta, delta_fit, raw=None, sigmaZ=1, si
 
 	count = cp.zeros(1, dtype=cp.uint32)
 	output = cp.zeros((num, 8), dtype=cp.float32)
-	#output[:,0] = z_out	
-	#output[:,1] = x_out	
-	#output[:,2] = y_out	
+	output[:,0] = z_out	
+	output[:,1] = x_out	
+	output[:,2] = y_out	
 	# Create integer coordinate arrays once
-	zi, xi, yi = z_out.astype(int), x_out.astype(int), y_out.astype(int)
+	#zi, xi, yi = z_out.astype(int), x_out.astype(int), y_out.astype(int)
 
 	# Use them for both indexing operations
-	output[:,7] = image[zi, xi, yi]
-	output[:,5] = raw[zi, xi, yi]
+	#output[:,7] = image[zi, xi, yi]
+	#output[:,5] = raw[zi, xi, yi]
 
 	# Adjust blocks for the number of points found
-	blocks = (num + threads - 1) // threads
+	#blocks = (num + threads - 1) // threads
 	#delta_fit_kernel((blocks,), (threads,), (image.ravel(), z_out, x_out, y_out, output, num, depth, height, width, delta_fit))
 
-	delta_fit_cross_corr_kernel((blocks,), (threads,), (image.ravel(), raw.ravel(), z_out, x_out, y_out, output, num, depth, height, width, delta_fit, sigmaZ, sigmaXY))
 
+	delta_fit_cross_corr_kernel((blocks,), (threads,), (image.ravel(), raw.ravel(), z_out, x_out, y_out, output, num, depth, height, width, delta_fit, sigmaZ, sigmaXY))
+	del z_out, x_out, y_out 	
+	cp._default_memory_pool.free_all_blocks()  # Free standard GPU memory pool
+	cp._default_pinned_memory_pool.free_all_blocks()  # Free pinned memory pool
+	cp.cuda.runtime.deviceSynchronize()  # Ensure all operations are completed
+	#print('    ', output.shape)
 	return output
 
 

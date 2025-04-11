@@ -150,9 +150,10 @@ class Utils:
 		self.convolve = convolve	
 	def norm_image(self, image):
 		xp = cp.get_array_module(image)
-		image = image.astype(xp.float32)  # Ensure correct type
+		#image = image.astype(xp.float32) # dont do this it duplikates in ram
 		blurred = self.convolve(image, self.kernel[None, :, :], mode="reflect")
-		return image - blurred
+		image -= blurred
+		return image
 
 
 if __name__ == "__main__":
