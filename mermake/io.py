@@ -104,7 +104,7 @@ def get_files(master_data_folders, set_ifov,iHm=None,iHM=None):
 import concurrent.futures
 def image_generator(hybs, fovs):
 	"""Generator that prefetches the next image while processing the current one."""
-	with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+	with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
 		future = None  # Holds the future for the next image
 		for all_flds, fov in zip(hybs, fovs):
 			for hyb in all_flds:

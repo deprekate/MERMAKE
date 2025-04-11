@@ -112,9 +112,9 @@ def find_local_maxima(image, threshold, delta, delta_fit, raw=None, sigmaZ=1, si
 
 	count = cp.zeros(1, dtype=cp.uint32)
 	output = cp.zeros((num, 8), dtype=cp.float32)
-	output[:,0] = z_out	
-	output[:,1] = x_out	
-	output[:,2] = y_out	
+	#output[:,0] = z_out	
+	#output[:,1] = x_out	
+	#output[:,2] = y_out	
 	# Create integer coordinate arrays once
 	#zi, xi, yi = z_out.astype(int), x_out.astype(int), y_out.astype(int)
 

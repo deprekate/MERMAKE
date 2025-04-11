@@ -16,6 +16,8 @@ print(xh0.shape)
 print(xh0)
 xh1 = np.load(sys.argv[2])['Xh']
 print(xh1.shape)
+print(xh1)
+
 
 shared = count_shared_points(xh0[:,:3], xh1[:,:3], tolerance=3)
 print(shared)

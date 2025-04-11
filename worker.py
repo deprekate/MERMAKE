@@ -38,7 +38,7 @@ if __name__ == "__main__":
 	save_folder = 'output_new'
 	iHm = 1 ; iHM = 16
 	shape = (4,40,3000,3000)
-	items = [(set_,ifov) for set_ in ['_set1'] for ifov in range(1,11)]
+	items = [(set_,ifov) for set_ in ['_set1'] for ifov in range(1,5)]
 	hybs = list()
 	fovs = list()
 	for item in items[:4]:
@@ -64,8 +64,9 @@ if __name__ == "__main__":
 
 	# various classes to do the computations efficiently
 	utils = Utils(ksize=30)
-	hyb_deconvolver = Deconvolver(psfs, shape[1:], tile_size=300, overlap=89, zpad=39, beta=0.0001)
-	dapi_deconvolver = Deconvolver(psfs, shape[1:], tile_size=300, overlap=59, zpad=13, beta=0.01)
+	tile_size = 500
+	hyb_deconvolver = Deconvolver(psfs, shape[1:], tile_size=500, overlap=89, zpad=39, beta=0.0001)
+	dapi_deconvolver = Deconvolver(psfs, shape[1:], tile_size=500, overlap=59, zpad=13, beta=0.01)
 	#hyb_maxima = Maxima(threshold = 3600, delta = 1, delta_fit = 3,sigmaZ = 1, sigmaXY = 1.5)	
 	#dapi_maxima = Maxima(threshold = 3, delta = 5, delta_fit = 5, sigmaZ = 1, sigmaXY = 1.5)	
 
@@ -82,9 +83,9 @@ if __name__ == "__main__":
 			flat = im_med[icol]
 			for x,y,tile,raw in hyb_deconvolver.tile_wise(view, flat):
 				tile[:] = utils.norm_image(tile)
-				#Xh = hyb_maxima.apply(tile, im_raw=raw)
+				#Xh0 = hyb_maxima.apply(tile, im_raw=raw)
 				Xh = find_local_maxima(tile, 3600.0, 1, 3, sigmaZ = 1, sigmaXY = 1.5, raw = raw)
-				keep = cp.all(Xh[:,1:3] < 300+89, axis=-1)
+				keep = cp.all(Xh[:,1:3] < tile_size+89, axis=-1)
 				keep &= cp.all(Xh[:,1:3] >= 89, axis=-1)
 				Xh = Xh[keep]
 				Xh[:,1] += x - 89
@@ -94,6 +95,7 @@ if __name__ == "__main__":
 			Xhf = cp.vstack(Xhf)
 			executor.submit(save_data, save_folder, path, icol, Xhf)
 			del view, flat
+		# now do dapi, but first clear some stuff from gpu ram
 		icol += 1
 		dapi = cim[icol].copy()
 		cim.clear()
@@ -103,7 +105,6 @@ if __name__ == "__main__":
 		import gc
 		gc.collect()  # Force Python's garbage collection to clean up
 		cp.cuda.runtime.deviceSynchronize()  # Ensure all GPU operations are completed
-		# the local maxima for the dapi is not finished
 		deconv = dapi_deconvolver.apply(dapi)
 		deconv[:] /= deconv.std()
 		Xh_plus = find_local_maxima(deconv, 3.0, 1, 3, sigmaZ = 1, sigmaXY = 1.5, raw = dapi)
