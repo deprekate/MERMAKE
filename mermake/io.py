@@ -68,17 +68,24 @@ class Container:
 			return getattr(self.data, name)
 		raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
 	def clear(self):
-		# Explicitly delete the CuPy array to release memory
-		del self.data
+		# Explicitly delete the CuPy array and synchronize
+		if hasattr(self, 'data') and self.data is not None:
+			self.data = None
+		cp.cuda.runtime.deviceSynchronize()
 		cp._default_memory_pool.free_all_blocks()
 		cp._default_pinned_memory_pool.free_all_blocks()
 
 def read_cim(path):
-	im = read_im(path)
-	cim = cp.asarray(im)
-	container = Container(cim)
-	container.path = path
-	return container
+	im = read_im(path)  # shape: (n_channels, z, y, x)
+	channel_containers = []
+	for icol in range(im.shape[0]):
+		chan = cp.asarray(im[icol])  # only one channel goes to GPU
+		container = Container(chan)
+		container.path = path
+		container.channel = icol
+		channel_containers.append(container)
+	return channel_containers  # List[Container]
+
 
 def get_iH(fld): return int(os.path.basename(fld).split('_')[0][1:])
 def get_files(master_data_folders, set_ifov,iHm=None,iHM=None):
@@ -105,20 +112,18 @@ import concurrent.futures
 def image_generator(hybs, fovs):
 	"""Generator that prefetches the next image while processing the current one."""
 	with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-		future = None  # Holds the future for the next image
+		future = None
 		for all_flds, fov in zip(hybs, fovs):
 			for hyb in all_flds:
 				file = os.path.join(hyb, fov)
-
-				# Submit the next image read operation
 				next_future = executor.submit(read_cim, file)
-				# If there was a previous future, yield its result
 				if future:
-					yield future.result()
-				# Move to the next future
+					result = future.result()
+					yield result
+					# Clean up after yielding to prevent accumulation
+					cp.cuda.runtime.deviceSynchronize()
+					cp._default_memory_pool.free_all_blocks()
 				future = next_future
-
-		# Yield the last remaining image
 		if future:
 			yield future.result()
 
@@ -138,7 +143,7 @@ def save_data(save_folder, path, icol, Xhf):
 	del Xhf
 def save_data_dapi(save_folder, path, icol, Xh_plus, Xh_minus):
 	fov, tag = path_parts(path)
-	save_fl = os.path.join(save_folder, f"{fov}--{tag}--col{icol}__Xhfits.npz")
+	save_fl = os.path.join(save_folder, f"{fov}--{tag}--dapiFeatures.npz")
 	os.makedirs(save_folder, exist_ok=True)
 	cp.savez_compressed(save_fl, Xh_plus=Xh_plus, Xh_minus=Xh_minus)
 	del Xh_plus, Xh_minus

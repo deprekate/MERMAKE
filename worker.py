@@ -50,69 +50,69 @@ if __name__ == "__main__":
 	for icol in [0,1,2,3]:
 		fl_med = 'flat_field/Scope5_med_col_raw'+str(icol)+'.npz'
 		med = np.array(np.load(fl_med)['im'],dtype=np.float32)
-		med = cv2.blur(med,(20,20))
+		if icol != 3:
+			# the dapi flat field is not blurred
+			med = cv2.blur(med,(20,20))
 		med = med / np.median(med)
 		im_med.append(med)
 	im_med = cp.asarray(np.stack(im_med))
 
-	
 	psfs = np.load(psf_file, allow_pickle=True)
 
 	# this mimics the behavior if there is only a single psf
 	key = (0,1500,1500)
 	psfs = { key : psfs[key] }
-
-	# various classes to do the computations efficiently
-	utils = Utils(ksize=30)
+	
+	# settings
 	tile_size = 500
-	hyb_deconvolver = Deconvolver(psfs, shape[1:], tile_size=500, overlap=89, zpad=39, beta=0.0001)
-	dapi_deconvolver = Deconvolver(psfs, shape[1:], tile_size=500, overlap=59, zpad=13, beta=0.01)
+	overlap = 89
+	# various classes to do the computations efficiently
+	utils_hybs = Utils(ksize=30)
+	utils_dapi = Utils(ksize=50)
+	hybs_deconvolver = Deconvolver(psfs, shape[1:], tile_size=tile_size, overlap=overlap, zpad=39, beta=0.0001)
+	dapi_deconvolver = Deconvolver(psfs, shape[1:], tile_size=tile_size, overlap=overlap-10, zpad=13, beta=0.01)
 	#hyb_maxima = Maxima(threshold = 3600, delta = 1, delta_fit = 3,sigmaZ = 1, sigmaXY = 1.5)	
 	#dapi_maxima = Maxima(threshold = 3, delta = 5, delta_fit = 5, sigmaZ = 1, sigmaXY = 1.5)	
 
 	# the save file executor to do the saving in parallel with computations
 	executor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
-	
+
+	deconv = cp.empty(shape[1:], dtype=cp.float32)	
 	for cim in image_generator(hybs, fovs):
-		path = cim.path
-		print(path)
 		for icol in [0,1,2]:
 			# there is probably a better way to do the Xh stacking
 			Xhf = list()
 			view = cim[icol]
 			flat = im_med[icol]
-			for x,y,tile,raw in hyb_deconvolver.tile_wise(view, flat):
-				tile[:] = utils.norm_image(tile)
+			for x,y,tile,raw in hybs_deconvolver.tile_wise(view, flat):
+				tile[:] = utils_hybs.norm_image(tile)
 				#Xh0 = hyb_maxima.apply(tile, im_raw=raw)
 				Xh = find_local_maxima(tile, 3600.0, 1, 3, sigmaZ = 1, sigmaXY = 1.5, raw = raw)
-				keep = cp.all(Xh[:,1:3] < tile_size+89, axis=-1)
-				keep &= cp.all(Xh[:,1:3] >= 89, axis=-1)
+				keep = cp.all((Xh[:,1:3] >= overlap) & (Xh[:,1:3] < tile_size + overlap), axis=-1)
 				Xh = Xh[keep]
-				Xh[:,1] += x - 89
-				Xh[:,2] += y - 89
+				Xh[:,1] += x - overlap
+				Xh[:,2] += y - overlap
 				if len(Xh):
 					Xhf.append(Xh)
 			Xhf = cp.vstack(Xhf)
-			executor.submit(save_data, save_folder, path, icol, Xhf)
-			del view, flat
-		# now do dapi, but first clear some stuff from gpu ram
+			executor.submit(save_data, save_folder, view.path, icol, Xhf)
+			view.clear()
+			del view
+		# now do dapi, but first clear some stuff from gpu ram to fit in 12GB
 		icol += 1
-		dapi = cim[icol].copy()
-		cim.clear()
-		del cim
-		cp._default_memory_pool.free_all_blocks()  # Free the standard memory pool
-		cp._default_pinned_memory_pool.free_all_blocks()  # Free pinned memory pool
-		import gc
-		gc.collect()  # Force Python's garbage collection to clean up
-		cp.cuda.runtime.deviceSynchronize()  # Ensure all GPU operations are completed
-		deconv = dapi_deconvolver.apply(dapi)
+		# Convert just the DAPI channel to float32 (with copy), before clearing the rest
+		view = cim[icol]
+		flat = im_med[icol]
+		# Deconvolve in-place into `dapi`
+		dapi_deconvolver.apply(view, flat_field=flat, output=deconv)
+		deconv[:] = utils_dapi.norm_image(deconv)
 		deconv[:] /= deconv.std()
-		Xh_plus = find_local_maxima(deconv, 3.0, 1, 3, sigmaZ = 1, sigmaXY = 1.5, raw = dapi)
+		Xh_plus = find_local_maxima(deconv, 3.0, 5, 5, sigmaZ = 1, sigmaXY = 1.5, raw = view )
 		deconv *= -1
-		Xh_minus = find_local_maxima(deconv, 3.0, 1, 3, sigmaZ = 1, sigmaXY = 1.5, raw = dapi )
-		del deconv
-		executor.submit(save_data_dapi, save_folder, path, icol, Xh_plus, Xh_minus)
-
+		Xh_minus = find_local_maxima(deconv, 3.0, 5, 5, sigmaZ = 1, sigmaXY = 1.5, raw = view )
+		executor.submit(save_data_dapi, save_folder, view.path, icol, Xh_plus, Xh_minus)
+		view.clear()
+		del view, cim
 
 
 

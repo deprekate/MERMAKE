@@ -142,11 +142,11 @@ def norm_image(image, ksize=30):
 class Utils:
 	def __init__(self, ksize=30, xp=cp):
 		self.ksize = ksize
-		self.kernel = cp.ones((ksize, ksize), dtype=cp.float32) / (ksize * ksize)
 		if xp == np:
 			from scipy.ndimage import convolve
 		else:
 			from cupyx.scipy.ndimage import convolve
+		self.kernel = xp.ones((ksize, ksize), dtype=xp.float32) / (ksize * ksize)
 		self.convolve = convolve	
 	def norm_image(self, image):
 		xp = cp.get_array_module(image)

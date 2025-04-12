@@ -99,28 +99,40 @@ class Deconvolver:
 		# Use cycle to repeat the single PSF or iterate normally if multiple PSFs exist
 		psf_ffts = cycle(self.psf_fft) if len(self.psf_fft) == 1 else iter(self.psf_fft)
 		tiles = self.tiled(image)
-		flats = self.tiled(flat_field[np.newaxis])
-		for (x,y,tile),(_,_,flat),psf_fft in zip(tiles, flats, psf_ffts):
-		#for (x,y,tile),psf_fft in zip(tiles, psf_ffts):
-			tile_pad[	 : zpad, :, :] = tile[zpad-1::-1, :, :]
-			tile_pad[ zpad:-zpad, :, :] = tile
-			tile_pad[-zpad:	 , :, :] = tile[-1:-zpad-1:-1, :, :]
 
-			# flat field correct
-			tile_pad[zpad:-zpad] /= flat
+		# this is broken into two seperate for loops to minimize the python side boolean
+		if flat_field is not None:
+			flats = self.tiled(flat_field[np.newaxis])
+			for (x,y,tile),(_,_,flat),psf_fft in zip(tiles, flats, psf_ffts):
+				tile_pad[	 : zpad,  :, :] = tile[zpad-1::-1, :, :]
+				tile_pad[ zpad:-zpad, :, :] = tile
+				tile_pad[-zpad:	    , :, :] = tile[-1:-zpad-1:-1, :, :]
+	
+				tile_pad[zpad:-zpad] /= flat
 
-			tile_fft[:] = xp.fft.fftn(tile_pad)
-			xp.multiply(tile_fft, psf_fft, out=tile_fft)
-			tile_res[:] = xp.fft.ifftn(tile_fft)[zpad:-zpad,:,:].real
-			yield x,y,tile_res,tile
+				tile_fft[:] = xp.fft.fftn(tile_pad)
+				xp.multiply(tile_fft, psf_fft, out=tile_fft)
+				tile_res[:] = xp.fft.ifftn(tile_fft)[zpad:-zpad,:,:].real
+				yield x,y,tile_res,tile
+		else:
+			for (x,y,tile),psf_fft in zip(tiles, psf_ffts):
+				tile_pad[	 : zpad,  :, :] = tile[zpad-1::-1, :, :]
+				tile_pad[ zpad:-zpad, :, :] = tile
+				tile_pad[-zpad:	    , :, :] = tile[-1:-zpad-1:-1, :, :]
+	
+				tile_fft[:] = xp.fft.fftn(tile_pad)
+				xp.multiply(tile_fft, psf_fft, out=tile_fft)
+				tile_res[:] = xp.fft.ifftn(tile_fft)[zpad:-zpad,:,:].real
+				yield x,y,tile_res,tile
 
-	def apply(self, image):
+	def apply(self, image, flat_field=None, output=None):
 		xp = cp.get_array_module(image)
-		output = xp.empty_like(image, dtype=xp.float32)
-		ones = xp.ones(image[:,0,...].shape)
-		for x,y,tile,_ in self.tile_wise(image, flat_field = ones ):
+		if output is None:
+			output = xp.empty_like(image, dtype=xp.float32)
+		for x,y,tile,_ in self.tile_wise(image, flat_field = flat_field ):
 			output[:,x:x+self.tile_size,y:y+self.tile_size] = tile[:,self.overlap:-self.overlap,self.overlap:-self.overlap]
 		return output
+
 
 	def tiled(self, image):
 		"""
@@ -226,10 +238,10 @@ class Deconvolver:
 	
 		return psff
 
-def full_deconv(image, psfs, tile_size=300, zpad = None, overlap = 89, beta = 0.001):
+def full_deconv(image, psfs, flat_field = None, tile_size=300, zpad = None, overlap = 89, beta = 0.001):
 	xp = cp.get_array_module(image)
 	shape = image.shape
 	if zpad is None:
 		zpad = shape[0]
 	deconvolver = Deconvolver(psfs, image_shape=shape, zpad=zpad, tile_size=tile_size, overlap=overlap, beta=beta)
-	return deconvolver.apply(image)
+	return deconvolver.apply(image, flat_field)
