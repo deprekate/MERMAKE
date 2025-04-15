@@ -129,8 +129,12 @@ class Deconvolver:
 		xp = cp.get_array_module(image)
 		if output is None:
 			output = xp.empty_like(image, dtype=xp.float32)
-		for x,y,tile,_ in self.tile_wise(image, flat_field = flat_field ):
-			output[:,x:x+self.tile_size,y:y+self.tile_size] = tile[:,self.overlap:-self.overlap,self.overlap:-self.overlap]
+		# Create a CUDA stream for better synchronization
+		stream = cp.cuda.Stream(non_blocking=True)
+		with stream:
+			for x,y,tile,_ in self.tile_wise(image, flat_field = flat_field ):
+				output[:,x:x+self.tile_size,y:y+self.tile_size] = tile[:,self.overlap:-self.overlap,self.overlap:-self.overlap]
+		stream.synchronize()
 		return output
 
 

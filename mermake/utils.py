@@ -146,12 +146,16 @@ class Utils:
 			from scipy.ndimage import convolve
 		else:
 			from cupyx.scipy.ndimage import convolve
+			from cupyx.scipy.ndimage import gaussian_filter
 		self.kernel = xp.ones((ksize, ksize), dtype=xp.float32) / (ksize * ksize)
 		self.convolve = convolve	
+		#self.filter = gaussian_filter
 	def norm_image(self, image):
 		xp = cp.get_array_module(image)
 		#image = image.astype(xp.float32) # dont do this it duplikates in ram
 		blurred = self.convolve(image, self.kernel[None, :, :], mode="reflect")
+		#sigma = 2
+		#blurred = self.filter(image, sigma=sigma, mode="reflect")
 		image -= blurred
 		return image
 

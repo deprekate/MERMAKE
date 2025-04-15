@@ -1,6 +1,7 @@
 import os
 import sys
 import concurrent.futures
+import time
 
 # put this first to make sure to capture the correct gpu
 os.environ["CUDA_VISIBLE_DEVICES"] = "1"  # Change "1" to the desired GPU ID
@@ -15,20 +16,21 @@ from mermake.deconvolver import Deconvolver
 #from mermake.maxima_gpu import find_local_maxima
 from mermake.maxim import find_local_maxima
 from mermake.io import image_generator, save_data, save_data_dapi, get_files
+import mermake.blur as blur
 
 def profile():
-    import gc
-    mempool = cp.get_default_memory_pool()
-    # Loop through all objects in the garbage collector
-    for obj in gc.get_objects():
-        if isinstance(obj, cp.ndarray):
-            # Check if it's a view (not a direct memory allocation)
-            if obj.base is not None:
-                # Skip views as they do not allocate new memory
-                continue
-            print(f"CuPy array with shape {obj.shape} and dtype {obj.dtype}")
-            print(f"Memory usage: {obj.nbytes / 1024**2:.2f} MB")  # Convert to MB
-    print(f"Used memory after: {mempool.used_bytes() / 1024**2:.2f} MB")
+	import gc
+	mempool = cp.get_default_memory_pool()
+	# Loop through all objects in the garbage collector
+	for obj in gc.get_objects():
+		if isinstance(obj, cp.ndarray):
+		    # Check if it's a view (not a direct memory allocation)
+		    if obj.base is not None:
+		        # Skip views as they do not allocate new memory
+		        continue
+		    print(f"CuPy array with shape {obj.shape} and dtype {obj.dtype}")
+		    print(f"Memory usage: {obj.nbytes / 1024**2:.2f} MB")  # Convert to MB
+	print(f"Used memory after: {mempool.used_bytes() / 1024**2:.2f} MB")
 
 if __name__ == "__main__":
 
@@ -78,15 +80,22 @@ if __name__ == "__main__":
 	executor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
 
 	deconv = cp.empty(shape[1:], dtype=cp.float32)	
+	buffer_tile = cp.empty( (shape[1], tile_size+2*overlap, tile_size+2*overlap), dtype=cp.float32 )
 	for cim in image_generator(hybs, fovs):
+		print(cim[0].path, flush=True)
 		for icol in [0,1,2]:
 			# there is probably a better way to do the Xh stacking
 			Xhf = list()
 			view = cim[icol]
 			flat = im_med[icol]
 			for x,y,tile,raw in hybs_deconvolver.tile_wise(view, flat):
-				tile[:] = utils_hybs.norm_image(tile)
+				blur.box_1d(tile, 30, axis=1, output=buffer_tile)
+				cp.cuda.runtime.deviceSynchronize()
+				blur.box_1d(buffer_tile, 30, axis=2, output=buffer_tile)
+				cp.cuda.runtime.deviceSynchronize()
 				#Xh0 = hyb_maxima.apply(tile, im_raw=raw)
+				tile -= buffer_tile
+				cp.cuda.runtime.deviceSynchronize()
 				Xh = find_local_maxima(tile, 3600.0, 1, 3, sigmaZ = 1, sigmaXY = 1.5, raw = raw)
 				keep = cp.all((Xh[:,1:3] >= overlap) & (Xh[:,1:3] < tile_size + overlap), axis=-1)
 				Xh = Xh[keep]
@@ -96,16 +105,24 @@ if __name__ == "__main__":
 					Xhf.append(Xh)
 			Xhf = cp.vstack(Xhf)
 			executor.submit(save_data, save_folder, view.path, icol, Xhf)
+			cp.cuda.runtime.deviceSynchronize()
 			view.clear()
 			del view
+
+		# Force synchronization before processing dapi
+		cp.cuda.runtime.deviceSynchronize()
+		cp._default_memory_pool.free_all_blocks()
 		# now do dapi, but first clear some stuff from gpu ram to fit in 12GB
 		icol += 1
 		# Convert just the DAPI channel to float32 (with copy), before clearing the rest
 		view = cim[icol]
 		flat = im_med[icol]
-		# Deconvolve in-place into `dapi`
+		# Deconvolve in-place into `deconv`
 		dapi_deconvolver.apply(view, flat_field=flat, output=deconv)
-		deconv[:] = utils_dapi.norm_image(deconv)
+		blurred = blur.box_1d(deconv, 30, axis=1, output=deconv)
+		cp.cuda.runtime.deviceSynchronize()
+		blur.box_1d(deconv, 30, axis=2, output=deconv)
+		cp.cuda.runtime.deviceSynchronize()
 		deconv[:] /= deconv.std()
 		Xh_plus = find_local_maxima(deconv, 3.0, 5, 5, sigmaZ = 1, sigmaXY = 1.5, raw = view )
 		deconv *= -1

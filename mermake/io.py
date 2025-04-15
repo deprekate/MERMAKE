@@ -70,6 +70,7 @@ class Container:
 	def clear(self):
 		# Explicitly delete the CuPy array and synchronize
 		if hasattr(self, 'data') and self.data is not None:
+			del self.data
 			self.data = None
 		cp.cuda.runtime.deviceSynchronize()
 		cp._default_memory_pool.free_all_blocks()
