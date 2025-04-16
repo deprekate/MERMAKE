@@ -7,18 +7,26 @@ from dask import array as da
 import cupy as cp
 import numpy as np
 
-class DaskArrayWithMetadata:
-	def __init__(self, dask_array, path):
-		self.dask_array = dask_array
-		self.path = path
 
-	def __getattr__(self, attr):
-		# This will forward any unknown attributes to the Dask array
-		return getattr(self.dask_array, attr)
-
-	def __repr__(self):
-		return f"<DaskArrayWithMetadata(shape={self.dask_array.shape}, path={self.path})>"
-
+def get_iH(fld): return int(os.path.basename(fld).split('_')[0][1:])
+def get_files(master_data_folders, set_ifov,iHm=None,iHM=None):
+	#if not os.path.exists(save_folder): os.makedirs(save_folder)
+	all_flds = []
+	for master_folder in master_data_folders:
+		all_flds += glob.glob(master_folder+os.sep+r'H*_AER_*')
+		#all_flds += glob.glob(master_folder+os.sep+r'H*_Igfbpl1_Aldh1l1_Ptbp1*')
+	### reorder based on hybe
+	all_flds = np.array(all_flds)[np.argsort([get_iH(fld)for fld in all_flds])] 
+	set_,ifov = set_ifov
+	all_flds = [fld for fld in all_flds if set_ in os.path.basename(fld)]
+	all_flds = [fld for fld in all_flds if ((get_iH(fld)>=iHm) and (get_iH(fld)<=iHM))]
+	#fovs_fl = save_folder+os.sep+'fovs__'+set_+'.npy'
+	folder_map_fovs = all_flds[0]#[fld for fld in all_flds if 'low' not in os.path.basename(fld)][0]
+	fls = glob.glob(folder_map_fovs+os.sep+'*.zarr')
+	fovs = np.sort([os.path.basename(fl) for fl in fls])
+	fov = fovs[ifov]
+	all_flds = [fld for fld in all_flds if os.path.exists(fld+os.sep+fov)]
+	return all_flds,fov
 def read_im(path,return_pos=False):
 	dirname = os.path.dirname(path)
 	fov = os.path.basename(path).split('_')[-1].split('.')[0]
@@ -40,10 +48,6 @@ def read_im(path,return_pos=False):
 		nzs = (shape[0]//nchannels)*nchannels
 		image = image[:nzs].reshape([shape[0]//nchannels,nchannels,shape[-2],shape[-1]])
 		image = image.swapaxes(0,1)
-		# this make the channel dimension the fastest changing so 'views' are produced from indexing
-		#image = image.transpose(0, 2, 3, 1)  # shape = (zplanes, Y, X, nchannels)
-
-	#image = DaskArrayWithMetadata(image, path)
 	if return_pos:
 		return image,x,y
 	return image
@@ -72,42 +76,22 @@ class Container:
 		if hasattr(self, 'data') and self.data is not None:
 			del self.data
 			self.data = None
-		cp.cuda.runtime.deviceSynchronize()
+		#cp.cuda.runtime.deviceSynchronize()
 		cp._default_memory_pool.free_all_blocks()
 		cp._default_pinned_memory_pool.free_all_blocks()
 
 def read_cim(path):
+	""" store channels as separate objects so tey can be sequentially deleted from ram"""
 	im = read_im(path)  # shape: (n_channels, z, y, x)
+	im = im.compute()
 	channel_containers = []
 	for icol in range(im.shape[0]):
-		chan = cp.asarray(im[icol])  # only one channel goes to GPU
+		chan = cp.asarray(im[icol])
 		container = Container(chan)
 		container.path = path
 		container.channel = icol
 		channel_containers.append(container)
 	return channel_containers  # List[Container]
-
-
-def get_iH(fld): return int(os.path.basename(fld).split('_')[0][1:])
-def get_files(master_data_folders, set_ifov,iHm=None,iHM=None):
-	#if not os.path.exists(save_folder): os.makedirs(save_folder)
-	all_flds = []
-	for master_folder in master_data_folders:
-		all_flds += glob.glob(master_folder+os.sep+r'H*_AER_*')
-		#all_flds += glob.glob(master_folder+os.sep+r'H*_Igfbpl1_Aldh1l1_Ptbp1*')
-	### reorder based on hybe
-	all_flds = np.array(all_flds)[np.argsort([get_iH(fld)for fld in all_flds])] 
-	set_,ifov = set_ifov
-	all_flds = [fld for fld in all_flds if set_ in os.path.basename(fld)]
-	all_flds = [fld for fld in all_flds if ((get_iH(fld)>=iHm) and (get_iH(fld)<=iHM))]
-	#fovs_fl = save_folder+os.sep+'fovs__'+set_+'.npy'
-	folder_map_fovs = all_flds[0]#[fld for fld in all_flds if 'low' not in os.path.basename(fld)][0]
-	fls = glob.glob(folder_map_fovs+os.sep+'*.zarr')
-	fovs = np.sort([os.path.basename(fl) for fl in fls])
-	fov = fovs[ifov]
-	all_flds = [fld for fld in all_flds if os.path.exists(fld+os.sep+fov)]
-	return all_flds,fov
-
 
 import concurrent.futures
 def image_generator(hybs, fovs):
@@ -121,12 +105,10 @@ def image_generator(hybs, fovs):
 				if future:
 					result = future.result()
 					yield result
-					# Clean up after yielding to prevent accumulation
-					cp.cuda.runtime.deviceSynchronize()
-					cp._default_memory_pool.free_all_blocks()
 				future = next_future
 		if future:
 			yield future.result()
+
 
 from pathlib import Path
 def path_parts(path):
@@ -165,6 +147,35 @@ def profile():
 	print(f"Used memory after: {mempool.used_bytes() / 1024**2:.2f} MB")
 
 
+import collections
+def buffered_image_generator(hybs, fovs, buffer_size=2):
+	buffer = collections.deque(maxlen=buffer_size)
 
+	# Helper to get next image
+	def get_next_image():
+		for all_flds, fov in zip(hybs, fovs):
+			for hyb in all_flds:
+				file = os.path.join(hyb, fov)
+				for fov in fovs:
+					path = os.path.join(hyb, fov)
+					yield read_cim(path)
 
+	image_iter = get_next_image()
+
+	# Pre-fill buffer
+	for _ in range(buffer_size):
+		try:
+			buffer.append(next(image_iter))
+		except StopIteration:
+			break
+
+	# Yield from buffer while filling it
+	while buffer:
+		current_image = buffer.popleft()
+		yield current_image
+
+		try:
+			buffer.append(next(image_iter))
+		except StopIteration:
+			pass
 

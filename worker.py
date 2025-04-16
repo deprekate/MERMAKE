@@ -4,13 +4,12 @@ import concurrent.futures
 import time
 
 # put this first to make sure to capture the correct gpu
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"  # Change "1" to the desired GPU ID
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # Change "1" to the desired GPU ID
 import cupy as cp
 cp.cuda.Device(0).use() # The above export doesnt always work so force CuPy to use GPU 0
 import numpy as np
 import cv2
 
-from mermake.utils import Utils
 from mermake.maxima import Maxima
 from mermake.deconvolver import Deconvolver
 #from mermake.maxima_gpu import find_local_maxima
@@ -24,12 +23,12 @@ def profile():
 	# Loop through all objects in the garbage collector
 	for obj in gc.get_objects():
 		if isinstance(obj, cp.ndarray):
-		    # Check if it's a view (not a direct memory allocation)
-		    if obj.base is not None:
-		        # Skip views as they do not allocate new memory
-		        continue
-		    print(f"CuPy array with shape {obj.shape} and dtype {obj.dtype}")
-		    print(f"Memory usage: {obj.nbytes / 1024**2:.2f} MB")  # Convert to MB
+			# Check if it's a view (not a direct memory allocation)
+			if obj.base is not None:
+				# Skip views as they do not allocate new memory
+				continue
+			print(f"CuPy array with shape {obj.shape} and dtype {obj.dtype}")
+			print(f"Memory usage: {obj.nbytes / 1024**2:.2f} MB")  # Convert to MB
 	print(f"Used memory after: {mempool.used_bytes() / 1024**2:.2f} MB")
 
 if __name__ == "__main__":
@@ -69,17 +68,14 @@ if __name__ == "__main__":
 	tile_size = 500
 	overlap = 89
 	# various classes to do the computations efficiently
-	utils_hybs = Utils(ksize=30)
-	utils_dapi = Utils(ksize=50)
 	hybs_deconvolver = Deconvolver(psfs, shape[1:], tile_size=tile_size, overlap=overlap, zpad=39, beta=0.0001)
-	dapi_deconvolver = Deconvolver(psfs, shape[1:], tile_size=tile_size, overlap=overlap-10, zpad=13, beta=0.01)
-	#hyb_maxima = Maxima(threshold = 3600, delta = 1, delta_fit = 3,sigmaZ = 1, sigmaXY = 1.5)	
-	#dapi_maxima = Maxima(threshold = 3, delta = 5, delta_fit = 5, sigmaZ = 1, sigmaXY = 1.5)	
+	dapi_deconvolver = Deconvolver(psfs, shape[1:], tile_size=tile_size, overlap=39, zpad=13, beta=0.01)
 
 	# the save file executor to do the saving in parallel with computations
 	executor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
 
 	deconv = cp.empty(shape[1:], dtype=cp.float32)	
+	buffer_channel = cp.empty(shape[1:], dtype=cp.float32)	
 	buffer_tile = cp.empty( (shape[1], tile_size+2*overlap, tile_size+2*overlap), dtype=cp.float32 )
 	for cim in image_generator(hybs, fovs):
 		print(cim[0].path, flush=True)
@@ -89,47 +85,42 @@ if __name__ == "__main__":
 			view = cim[icol]
 			flat = im_med[icol]
 			for x,y,tile,raw in hybs_deconvolver.tile_wise(view, flat):
+				# do two separate 1d blurs for now, put into a method later
+				# i think a blur with the output also being the input works?
 				blur.box_1d(tile, 30, axis=1, output=buffer_tile)
-				cp.cuda.runtime.deviceSynchronize()
 				blur.box_1d(buffer_tile, 30, axis=2, output=buffer_tile)
-				cp.cuda.runtime.deviceSynchronize()
-				#Xh0 = hyb_maxima.apply(tile, im_raw=raw)
-				tile -= buffer_tile
-				cp.cuda.runtime.deviceSynchronize()
+				cp.subtract(tile, buffer_tile, out=tile)
 				Xh = find_local_maxima(tile, 3600.0, 1, 3, sigmaZ = 1, sigmaXY = 1.5, raw = raw)
 				keep = cp.all((Xh[:,1:3] >= overlap) & (Xh[:,1:3] < tile_size + overlap), axis=-1)
 				Xh = Xh[keep]
 				Xh[:,1] += x - overlap
 				Xh[:,2] += y - overlap
-				if len(Xh):
-					Xhf.append(Xh)
+				Xhf.append(Xh)
+			Xhf = [x for x in Xhf if x.shape[0] > 0]
 			Xhf = cp.vstack(Xhf)
-			executor.submit(save_data, save_folder, view.path, icol, Xhf)
 			cp.cuda.runtime.deviceSynchronize()
+			executor.submit(save_data, save_folder, view.path, icol, Xhf)
 			view.clear()
-			del view
-
-		# Force synchronization before processing dapi
-		cp.cuda.runtime.deviceSynchronize()
+			del view, Xh, Xhf
+		view = cim[3]
+		flat = im_med[3]
+		del cim
 		cp._default_memory_pool.free_all_blocks()
+		cp.cuda.runtime.deviceSynchronize()
+		
 		# now do dapi, but first clear some stuff from gpu ram to fit in 12GB
-		icol += 1
-		# Convert just the DAPI channel to float32 (with copy), before clearing the rest
-		view = cim[icol]
-		flat = im_med[icol]
 		# Deconvolve in-place into `deconv`
 		dapi_deconvolver.apply(view, flat_field=flat, output=deconv)
-		blurred = blur.box_1d(deconv, 30, axis=1, output=deconv)
-		cp.cuda.runtime.deviceSynchronize()
-		blur.box_1d(deconv, 30, axis=2, output=deconv)
-		cp.cuda.runtime.deviceSynchronize()
-		deconv[:] /= deconv.std()
+		blur.box_1d(deconv, 50, axis=1, output=buffer_channel)
+		blur.box_1d(buffer_channel, 50, axis=2, output=buffer_channel)
+		cp.subtract(deconv, buffer_channel, out=deconv)
+		cp.divide(deconv, deconv.std(), out=deconv)
 		Xh_plus = find_local_maxima(deconv, 3.0, 5, 5, sigmaZ = 1, sigmaXY = 1.5, raw = view )
 		deconv *= -1
 		Xh_minus = find_local_maxima(deconv, 3.0, 5, 5, sigmaZ = 1, sigmaXY = 1.5, raw = view )
 		executor.submit(save_data_dapi, save_folder, view.path, icol, Xh_plus, Xh_minus)
 		view.clear()
-		del view, cim
+		del view
 
 
 

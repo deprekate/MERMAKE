@@ -121,45 +121,6 @@ def count_hybs(args):
 	print(num)
 	print(args)
 
-def norm_image(image, ksize=30):
-	xp = cp.get_array_module(image)
-	if xp == np:
-		from scipy.ndimage import convolve
-	else:
-		from cupyx.scipy.ndimage import convolve
-
-	image = image.astype(xp.float32)  # Ensure correct type
-	kernel = xp.ones((ksize, ksize), dtype=xp.float32) / (ksize * ksize)
-
-	# Apply blur to each slice in parallel without looping in Python
-	#padded = np.pad(image, ((1,0) ,(1, 0), (1, 0)), mode='reflect')
-	#blurred = convolve(padded, kernel[None, :, :], mode="constant")
-	#return image - blurred [0:image.shape[0], 0:image.shape[1], 0:image.shape[2]]
-	blurred = convolve(image, kernel[None, :, :], mode="reflect")
-	return image - blurred
-
-# Create kernel once to reuse across norm_image calls
-class Utils:
-	def __init__(self, ksize=30, xp=cp):
-		self.ksize = ksize
-		if xp == np:
-			from scipy.ndimage import convolve
-		else:
-			from cupyx.scipy.ndimage import convolve
-			from cupyx.scipy.ndimage import gaussian_filter
-		self.kernel = xp.ones((ksize, ksize), dtype=xp.float32) / (ksize * ksize)
-		self.convolve = convolve	
-		#self.filter = gaussian_filter
-	def norm_image(self, image):
-		xp = cp.get_array_module(image)
-		#image = image.astype(xp.float32) # dont do this it duplikates in ram
-		blurred = self.convolve(image, self.kernel[None, :, :], mode="reflect")
-		#sigma = 2
-		#blurred = self.filter(image, sigma=sigma, mode="reflect")
-		image -= blurred
-		return image
-
-
 if __name__ == "__main__":
 	# wcmatch requires ?*+@ before the () group pattern 
 	print(regex_path)
