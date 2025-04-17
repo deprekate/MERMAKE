@@ -1,6 +1,7 @@
 extern "C" __global__
 void local_maxima(const float* image, float threshold, int delta, int delta_fit,
-				  float* z_out, float* x_out, float* y_out, unsigned int* count,
+				  unsigned short* z_out, unsigned short* x_out, unsigned short* y_out,
+				  unsigned int* count,
 				  int depth, int height, int width, int max_points) {
 	// Get flattened index
 	int idx = blockDim.x * blockIdx.x + threadIdx.x;
@@ -72,89 +73,14 @@ void local_maxima(const float* image, float threshold, int delta, int delta_fit,
 	}
 }
 
-extern "C" __global__
-void delta_fit(
-	const float* __restrict__ image,
-	const float* __restrict__ z_out,   // (num_maxima)
-	const float* __restrict__ x_out,   // (num_maxima)
-	const float* __restrict__ y_out,   // (num_maxima)
-	float* __restrict__ output,		// (num_maxima, 6) [zc, xc, yc, background, habs, h]
-	int num_maxima,
-	int Z, int X, int Y,
-	int delta_fit
-) {
-	int idx = blockIdx.x * blockDim.x + threadIdx.x;
-	if (idx >= num_maxima) return;
-
-	int z0 = (int)z_out[idx];
-	int x0 = (int)x_out[idx];
-	int y0 = (int)y_out[idx];
-
-	float sum_val = 0.0f;
-	float sum_z = 0.0f;
-	float sum_x = 0.0f;
-	float sum_y = 0.0f;
-	float min_val = 1e20f;
-	float count = 0.0f;
-
-	for (int dz = -delta_fit; dz <= delta_fit; ++dz) {
-		for (int dx = -delta_fit; dx <= delta_fit; ++dx) {
-			for (int dy = -delta_fit; dy <= delta_fit; ++dy) {
-			    if (dz * dz + dx * dx + dy * dy > delta_fit * delta_fit) continue;
-
-			    int zz = z0 + dz;
-			    int xx = x0 + dx;
-			    int yy = y0 + dy;
-
-			    // Reflect if out of bounds
-			    zz = zz < 0 ? -zz : (zz >= Z ? 2 * Z - zz - 2 : zz);
-			    xx = xx < 0 ? -xx : (xx >= X ? 2 * X - xx - 2 : xx);
-			    yy = yy < 0 ? -yy : (yy >= Y ? 2 * Y - yy - 2 : yy);
-
-			    float val = image[zz * (X * Y) + xx * Y + yy];
-
-			    if (val < min_val) min_val = val;
-				// geometric center
-			    //sum_val += val;
-			    //sum_z += dz;// * val;
-			    //sum_x += dx;// * val;
-			    //sum_y += dy;// * val;
-				// intensity center
-				sum_val += val - min_val;  // Subtract background from each value
-				sum_z += (zz) * (val - min_val);  // Use actual coordinate (not offset)
-				sum_x += (xx) * (val - min_val);  // and subtract background
-				sum_y += (yy) * (val - min_val);
-
-				count += 1.0f;
-			}
-		}
-	}
-
-	// geometric center
-	//float center_z = z0 + sum_z / count;
-	//float center_x = x0 + sum_x / count;
-	//float center_y = y0 + sum_y / count;
-	// intensity center
-	float center_z = (sum_val > 0) ? sum_z / sum_val : z0;
-	float center_x = (sum_val > 0) ? sum_x / sum_val : x0;
-	float center_y = (sum_val > 0) ? sum_y / sum_val : y0;
-
-	// Output: [zc, xc, yc, background, habs, h]
-	output[idx * 8 + 0] = center_z;
-	output[idx * 8 + 1] = center_x;
-	output[idx * 8 + 2] = center_y;
-	output[idx * 8 + 3] = min_val;
-	//output[idx * 8 + 7] = image[z0 * (X * Y) + x0 * Y + y0]; // h
-}
-
+#define MAX_KERNEL_POINTS 515
 extern "C" __global__
 void delta_fit_cross_corr(
 	const float* __restrict__ image,
-	//const float* __restrict__ raw,  // can be NULL
 	const unsigned short* __restrict__ raw,
-	const float* __restrict__ z_out,   // (num_maxima)
-	const float* __restrict__ x_out,   // (num_maxima)
-	const float* __restrict__ y_out,   // (num_maxima)
+	unsigned short* __restrict__ z_out,   // (num_maxima)
+	unsigned short* __restrict__ x_out,   // (num_maxima)
+	unsigned short* __restrict__ y_out,   // (num_maxima)
 	float* __restrict__ output,		// (num_maxima, 8) [zc, xc, yc, background, habs, h, cross_corr, delta_fit_value]
 	int num_maxima,
 	int Z, int X, int Y,
@@ -164,9 +90,9 @@ void delta_fit_cross_corr(
 	int idx = blockIdx.x * blockDim.x + threadIdx.x;
 	if (idx >= num_maxima) return;
 
-	int z0 = (int)z_out[idx];
-	int x0 = (int)x_out[idx];
-	int y0 = (int)y_out[idx];
+	int z0 = z_out[idx];
+	int x0 = x_out[idx];
+	int y0 = y_out[idx];
 
 	float sum_val = 0.0f;
 	float sum_z = 0.0f;
@@ -175,9 +101,9 @@ void delta_fit_cross_corr(
 	float min_val = 1e20f;
 
 	// Cross-correlation computation (Gaussian weights)
-	float norm_G[125];  // Enough for delta_fit=3
-	float sample_vals[125];
-	float raw_vals[125];
+	float norm_G[MAX_KERNEL_POINTS];
+	float sample_vals[MAX_KERNEL_POINTS];
+	float raw_vals[MAX_KERNEL_POINTS];
 	int count = 0;
 
 	// Step 1: Collect all samples and calculate Gaussian weights

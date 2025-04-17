@@ -84,7 +84,7 @@ def find_local_maxima(image, threshold, delta, delta_fit, raw=None, sigmaZ=1, si
 	max_points = depth * height * width
 
 	# Allocate output arrays
-	z_out = cp.zeros(max_points, dtype=cp.float32)
+	z_out = cp.zeros(max_points, dtype=cp.uint16)
 	x_out = cp.zeros_like(z_out)
 	y_out = cp.zeros_like(z_out)
 
