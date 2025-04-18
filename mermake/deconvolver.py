@@ -2,7 +2,6 @@ import gc
 from itertools import zip_longest, chain, repeat, cycle
 
 import cupy as cp
-cp.cuda.set_allocator(None)  # Disable CuPy memory pool
 import numpy as np
 
 def repeat_last(iterable):
@@ -107,9 +106,9 @@ class Deconvolver:
 				tile_pad[	 : zpad,  :, :] = tile[zpad-1::-1, :, :]
 				tile_pad[ zpad:-zpad, :, :] = tile
 				tile_pad[-zpad:	    , :, :] = tile[-1:-zpad-1:-1, :, :]
-	
-				tile_pad[zpad:-zpad] /= flat
-
+		
+				cp.divide(tile_pad[zpad:-zpad], flat, out=tile_pad[zpad:-zpad])
+					
 				tile_fft[:] = xp.fft.fftn(tile_pad)
 				xp.multiply(tile_fft, psf_fft, out=tile_fft)
 				tile_res[:] = xp.fft.ifftn(tile_fft)[zpad:-zpad,:,:].real

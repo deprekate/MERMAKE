@@ -10,10 +10,9 @@ cp.cuda.Device(0).use() # The above export doesnt always work so force CuPy to u
 import numpy as np
 import cv2
 
-from mermake.maxima import Maxima
 from mermake.deconvolver import Deconvolver
-#from mermake.maxima_gpu import find_local_maxima
-from mermake.maxim import find_local_maxima
+from mermake.maxima import find_local_maxima
+#from other.maxim import find_local_maxima
 from mermake.io import image_generator, save_data, save_data_dapi, get_files
 import mermake.blur as blur
 
@@ -58,18 +57,19 @@ if __name__ == "__main__":
 		im_med.append(med)
 	im_med = cp.asarray(np.stack(im_med))
 
+	# eventually make a smart psf loader method to handle the different types of psf files
 	psfs = np.load(psf_file, allow_pickle=True)
 
 	# this mimics the behavior if there is only a single psf
-	key = (0,1500,1500)
-	psfs = { key : psfs[key] }
+	#key = (0,1500,1500)
+	#psfs = { key : psfs[key] }
 	
 	# settings
-	tile_size = 500
+	tile_size = 300
 	overlap = 89
-	# various classes to do the computations efficiently
+	# these can be very large objects in gpu ram, adjust accoringly to suit gpu specs
 	hybs_deconvolver = Deconvolver(psfs, shape[1:], tile_size=tile_size, overlap=overlap, zpad=39, beta=0.0001)
-	dapi_deconvolver = Deconvolver(psfs, shape[1:], tile_size=tile_size, overlap=39, zpad=13, beta=0.01)
+	dapi_deconvolver = Deconvolver(psfs, shape[1:], tile_size=tile_size, overlap=overlap-10, zpad=19, beta=0.01)
 
 	# the save file executor to do the saving in parallel with computations
 	executor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
@@ -102,6 +102,8 @@ if __name__ == "__main__":
 			executor.submit(save_data, save_folder, view.path, icol, Xhf)
 			view.clear()
 			del view, Xh, Xhf
+			#cp._default_memory_pool.free_all_blocks()
+
 		view = cim[3]
 		flat = im_med[3]
 		del cim
@@ -114,13 +116,16 @@ if __name__ == "__main__":
 		blur.box_1d(deconv, 50, axis=1, output=buffer_channel)
 		blur.box_1d(buffer_channel, 50, axis=2, output=buffer_channel)
 		cp.subtract(deconv, buffer_channel, out=deconv)
-		cp.divide(deconv, deconv.std(), out=deconv)
+		std_val = float(cp.asnumpy(cp.linalg.norm(deconv.ravel()) / cp.sqrt(deconv.size)))
+		cp.divide(deconv, std_val, out=deconv)
 		Xh_plus = find_local_maxima(deconv, 3.0, 5, 5, sigmaZ = 1, sigmaXY = 1.5, raw = view )
-		deconv *= -1
+		cp.multiply(deconv, -1, out=deconv)
 		Xh_minus = find_local_maxima(deconv, 3.0, 5, 5, sigmaZ = 1, sigmaXY = 1.5, raw = view )
+		cp.cuda.runtime.deviceSynchronize()
 		executor.submit(save_data_dapi, save_folder, view.path, icol, Xh_plus, Xh_minus)
 		view.clear()
 		del view
+		#cp._default_memory_pool.free_all_blocks()
 
 
 
