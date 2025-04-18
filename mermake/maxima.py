@@ -76,9 +76,9 @@ def find_local_maxima(image, threshold, delta, delta_fit, raw=None, sigmaZ=1, si
 		Tuple of (z, x, y) coordinates for refined local maxima
 	"""
 	# Ensure the image is in C-contiguous order for the kernel
-	if not image.flags.c_contiguous:
-		print('not contiguous')
-		image = cp.ascontiguousarray(image)
+	#if not image.flags.c_contiguous:
+	#	print('not contiguous')
+	#	image = cp.ascontiguousarray(image)
 
 	depth, height, width = image.shape
 	max_points = depth * height * width
@@ -106,33 +106,20 @@ def find_local_maxima(image, threshold, delta, delta_fit, raw=None, sigmaZ=1, si
 	if num == 0:
 		# Return empty result if no local maxima found
 		return cp.zeros((0, 8), dtype=cp.float32)
+
 	z_out = z_out[:num]
 	x_out = x_out[:num]
 	y_out = y_out[:num]
 
 	count = cp.zeros(1, dtype=cp.uint32)
 	output = cp.zeros((num, 8), dtype=cp.float32)
-	#output[:,0] = z_out	
-	#output[:,1] = x_out	
-	#output[:,2] = y_out	
-	# Create integer coordinate arrays once
-	#zi, xi, yi = z_out.astype(int), x_out.astype(int), y_out.astype(int)
-
-	# Use them for both indexing operations
-	#output[:,7] = image[zi, xi, yi]
-	#output[:,5] = raw[zi, xi, yi]
-
-	# Adjust blocks for the number of points found
-	#blocks = (num + threads - 1) // threads
-	#delta_fit_kernel((blocks,), (threads,), (image.ravel(), z_out, x_out, y_out, output, num, depth, height, width, delta_fit))
-
 
 	delta_fit_cross_corr_kernel((blocks,), (threads,), (image.ravel(), raw.ravel(), z_out, x_out, y_out, output, num, depth, height, width, delta_fit, sigmaZ, sigmaXY))
 	del z_out, x_out, y_out 	
 	cp._default_memory_pool.free_all_blocks()  # Free standard GPU memory pool
 	cp._default_pinned_memory_pool.free_all_blocks()  # Free pinned memory pool
 	cp.cuda.runtime.deviceSynchronize()  # Ensure all operations are completed
-	#print('    ', output.shape)
+	
 	return output
 
 
