@@ -1,0 +1,2 @@
+include *.md LICENSE VERSION
+include mermake/*.cu
