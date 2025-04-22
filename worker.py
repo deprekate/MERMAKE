@@ -55,14 +55,14 @@ if __name__ == "__main__":
 	overlap = 89
 	# these can be very large objects in gpu ram, adjust accoringly to suit gpu specs
 	hybs_deconvolver = Deconvolver(psfs, shape[1:], tile_size=tile_size, overlap=overlap, zpad=39, beta=0.0001)
-	dapi_deconvolver = Deconvolver(psfs, shape[1:], tile_size=tile_size, overlap=overlap-50, zpad=19, beta=0.01)
+	dapi_deconvolver = Deconvolver(psfs, shape[1:], tile_size=tile_size, overlap=overlap-20, zpad=19, beta=0.01)
 
 	# the save file executor to do the saving in parallel with computations
 	executor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
 
 	deconv = cp.empty(shape[1:], dtype=cp.float32)	
 	#buffer_channel = cp.empty(shape[1:], dtype=cp.float32)	
-	buffer_tile = cp.empty( (shape[1], tile_size+2*overlap, tile_size+2*overlap), dtype=cp.float32 )
+	#buffer_tile = cp.empty( (shape[1], tile_size+2*overlap, tile_size+2*overlap), dtype=cp.float32 )
 
 	#from other.io import stream_based_prefetcher
 	for cim in image_generator(hybs, fovs):
@@ -72,12 +72,12 @@ if __name__ == "__main__":
 			Xhf = list()
 			view = cim[icol]
 			flat = im_med[icol]
-			for x,y,tile,raw in hybs_deconvolver.tile_wise(view, flat):
+			for x,y,tile,raw in hybs_deconvolver.tile_wise(view, flat, blur_radius=30):
 				# do two separate 1d blurs for now, put into a method later
 				# i think a blur with the output also being the input works?
-				blur.box_1d(tile, 30, axis=1, output=buffer_tile)
-				blur.box_1d(buffer_tile, 30, axis=2, output=buffer_tile)
-				cp.subtract(tile, buffer_tile, out=tile)
+				#blur.box_1d(tile, 30, axis=1, output=buffer_tile)
+				#blur.box_1d(buffer_tile, 30, axis=2, output=buffer_tile)
+				#cp.subtract(tile, buffer_tile, out=tile)
 				Xh = find_local_maxima(tile, 3600.0, 1, 3, sigmaZ = 1, sigmaXY = 1.5, raw = raw)
 				keep = cp.all((Xh[:,1:3] >= overlap) & (Xh[:,1:3] < tile_size + overlap), axis=-1)
 				Xh = Xh[keep]
@@ -97,7 +97,7 @@ if __name__ == "__main__":
 		# Deconvolve in-place into `deconv`
 		view = cim[3]
 		flat = im_med[3]
-		dapi_deconvolver.apply_and_blur(view, flat_field=flat, output=deconv, blur_radius=50)
+		dapi_deconvolver.apply(view, flat_field=flat, blur_radius=50, output=deconv)
 		#blur.box_1d(deconv, 50, axis=1, output=buffer_channel)
 		#blur.box_1d(buffer_channel, 50, axis=2, output=buffer_channel)
 		#cp.subtract(deconv, buffer_channel, out=deconv)

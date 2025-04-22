@@ -92,77 +92,53 @@ class Deconvolver:
 		self.zpad = zpad
 		self.xp = xp
 
-	def tile_wise(self, image, flat_field=None):
+	def tile_wise(self, image, flat_field=None, blur_radius=None):
 		xp = cp.get_array_module(image)
 		zpad = self.zpad
 		tile_pad = self.tile_pad
 		tile_fft = self.tile_fft
 		tile_res = self.tile_res
+		tile_buf = self.tile_buf
 	
-		# Use cycle to repeat the single PSF or iterate normally if multiple PSFs exist
+		# use cycle to repeat the single PSF or iterate normally if multiple PSFs exist
 		psf_ffts = cycle(self.psf_fft) if len(self.psf_fft) == 1 else iter(self.psf_fft)
 		tiles = self.tiled(image)
-
-		# this is broken into two seperate for loops to minimize the python side boolean
-		if flat_field is not None:
-			flats = self.tiled(flat_field[np.newaxis])
-			for (x,y,tile),(_,_,flat),psf_fft in zip(tiles, flats, psf_ffts):
-				tile_pad[	 : zpad,  :, :] = tile[zpad-1::-1, :, :]
-				tile_pad[ zpad:-zpad, :, :] = tile
-				tile_pad[-zpad:		, :, :] = tile[-1:-zpad-1:-1, :, :]
+		flats = cycle([None]) if flat_field is None else self.tiled(flat_field[np.newaxis])
 		
-				cp.divide(tile_pad[zpad:-zpad], flat, out=tile_pad[zpad:-zpad])
-					
-				tile_fft[:] = xp.fft.fftn(tile_pad)
-				xp.multiply(tile_fft, psf_fft, out=tile_fft)
-				tile_res[:] = xp.fft.ifftn(tile_fft)[zpad:-zpad,:,:].real
-				yield x,y,tile_res,tile
-		else:
-			for (x,y,tile),psf_fft in zip(tiles, psf_ffts):
-				tile_pad[	 : zpad,  :, :] = tile[zpad-1::-1, :, :]
-				tile_pad[ zpad:-zpad, :, :] = tile
-				tile_pad[-zpad:		, :, :] = tile[-1:-zpad-1:-1, :, :]
+		# the big loop
+		for (x,y,tile),(_,_,flat),psf_fft in zip(tiles, flats, psf_ffts):
+			# reflect padding along the z axis
+			tile_pad[	 : zpad,  :, :] = tile[zpad-1::-1, :, :]
+			tile_pad[ zpad:-zpad, :, :] = tile
+			tile_pad[-zpad:		, :, :] = tile[-1:-zpad-1:-1, :, :]
 	
-				tile_fft[:] = xp.fft.fftn(tile_pad)
-				xp.multiply(tile_fft, psf_fft, out=tile_fft)
-				tile_res[:] = xp.fft.ifftn(tile_fft)[zpad:-zpad,:,:].real
-				yield x,y,tile_res,tile
+			# flat field correction
+			if flat_field is not None:
+				cp.divide(tile_pad[zpad:-zpad], flat, out=tile_pad[zpad:-zpad])
+			
+			# the fft convolution and deconvolution
+			tile_fft[:] = xp.fft.fftn(tile_pad)
+			xp.multiply(tile_fft, psf_fft, out=tile_fft)
+			tile_res[:] = xp.fft.ifftn(tile_fft)[zpad:-zpad,:,:].real
 
-	def apply(self, image, flat_field=None, output=None):
+			# optional blur subtraction
+			if blur_radius is not None:
+				blur.box_1d(tile_res, blur_radius, axis=1, output=tile_buf)
+				blur.box_1d(tile_buf, blur_radius, axis=2, output=tile_buf)
+				xp.subtract(tile_res, tile_buf, out=tile_res)
+			yield x,y,tile_res,tile
+
+	def apply(self, image, flat_field=None, blur_radius=None, output=None):
 		xp = cp.get_array_module(image)
 		if output is None:
 			output = xp.empty_like(image, dtype=xp.float32)
 		# Create a CUDA stream for better synchronization
 		stream = cp.cuda.Stream(non_blocking=True)
 		with stream:
-			for x,y,tile,_ in self.tile_wise(image, flat_field = flat_field ):
+			for x,y,tile,_ in self.tile_wise(image, flat_field = flat_field, blur_radius = blur_radius ):
 				output[:,x:x+self.tile_size,y:y+self.tile_size] = tile[:,self.overlap:-self.overlap,self.overlap:-self.overlap]
 		stream.synchronize()
 		return output
-
-	def apply_and_blur(self, image, flat_field=None, output=None, blur_radius=50):
-		xp = cp.get_array_module(image)
-		if output is None:
-			output = xp.empty_like(image, dtype=xp.float32)
-		buffer = self.tile_buf
-
-		stream = cp.cuda.Stream(non_blocking=True)
-		with stream:
-			for x, y, tile, _ in self.tile_wise(image, flat_field=flat_field):
-				# First pass: blur in axis 1
-				blur.box_1d(tile, blur_radius, axis=1, output=buffer)
-				blur.box_1d(buffer, blur_radius, axis=2, output=buffer)
-
-				# subtract the bluured background from tile inplace
-				xp.subtract(tile, buffer, out=tile)
-				# Write to output
-				output[:, x:x+self.tile_size, y:y+self.tile_size] = \
-					tile[:, self.overlap:-self.overlap, self.overlap:-self.overlap]
-
-		stream.synchronize()
-		return output
-
-
 
 	def tiled(self, image):
 		"""
