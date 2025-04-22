@@ -27,32 +27,38 @@ def get_files(master_data_folders, set_ifov,iHm=None,iHM=None):
 	fov = fovs[ifov]
 	all_flds = [fld for fld in all_flds if os.path.exists(fld+os.sep+fov)]
 	return all_flds,fov
-def read_im(path,return_pos=False):
-	dirname = os.path.dirname(path)
-	fov = os.path.basename(path).split('_')[-1].split('.')[0]
-	file_ = dirname+os.sep+fov+os.sep+'data'
-	image = da.from_zarr(file_)[1:]
 
-	shape = image.shape
-	#nchannels = 4
-	xml_file = os.path.dirname(path)+os.sep+os.path.basename(path).split('.')[0]+'.xml'
-	if os.path.exists(xml_file):
-		txt = open(xml_file,'r').read()
-		tag = '<z_offsets type="string">'
-		zstack = txt.split(tag)[-1].split('</')[0]
-		
-		tag = '<stage_position type="custom">'
-		x,y = eval(txt.split(tag)[-1].split('</')[0])
-		
-		nchannels = int(zstack.split(':')[-1])
-		nzs = (shape[0]//nchannels)*nchannels
-		image = image[:nzs].reshape([shape[0]//nchannels,nchannels,shape[-2],shape[-1]])
-		image = image.swapaxes(0,1)
-	if image.dtype == np.uint8:
-		image = image.astype(np.float32)**2
-	if return_pos:
-		return image,x,y
-	return image
+def read_im(path, return_pos=False):
+    dirname = os.path.dirname(path)
+    fov = os.path.basename(path).split('_')[-1].split('.')[0]
+    file_ = os.path.join(dirname, fov, 'data')
+
+    # Force eager loading from Zarr
+    z = zarr.open(file_, mode='r')
+    image = np.array(z[1:])  # use np.array(), not np.asarray()
+
+    shape = image.shape
+    xml_file = os.path.splitext(path)[0] + '.xml'
+    if os.path.exists(xml_file):
+        txt = open(xml_file, 'r').read()
+        tag = '<z_offsets type="string">'
+        zstack = txt.split(tag)[-1].split('</')[0]
+
+        tag = '<stage_position type="custom">'
+        x, y = eval(txt.split(tag)[-1].split('</')[0])
+
+        nchannels = int(zstack.split(':')[-1])
+        nzs = (shape[0] // nchannels) * nchannels
+        image = image[:nzs].reshape([shape[0] // nchannels, nchannels, shape[-2], shape[-1]])
+        image = image.swapaxes(0, 1)
+
+    if image.dtype == np.uint8:
+        image = image.astype(np.float32) ** 2
+
+    if return_pos:
+        return image, x, y
+    return image
+
 
 class Container:
 	def __init__(self, data, **kwargs):
@@ -78,14 +84,9 @@ class Container:
 		if hasattr(self, 'data') and self.data is not None:
 			del self.data
 			self.data = None
-		#cp.cuda.runtime.deviceSynchronize()
-		cp._default_memory_pool.free_all_blocks()
-		cp._default_pinned_memory_pool.free_all_blocks()
-
 def read_cim(path):
 	""" store channels as separate objects so tey can be sequentially deleted from ram"""
 	im = read_im(path)  # shape: (n_channels, z, y, x)
-	im = im.compute()
 	channel_containers = []
 	for icol in range(im.shape[0]):
 		chan = cp.asarray(im[icol])
@@ -95,18 +96,24 @@ def read_cim(path):
 		channel_containers.append(container)
 	return channel_containers  # List[Container]
 
+#def read_cim(path):
+#	im = read_im(path)
+#	cim = cp.asarray(im)
+#	container = Container(cim)
+#	container.path = path
+#	return container
+
 import concurrent.futures
 def image_generator(hybs, fovs):
 	"""Generator that prefetches the next image while processing the current one."""
-	with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+	with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
 		future = None
 		for all_flds, fov in zip(hybs, fovs):
 			for hyb in all_flds:
 				file = os.path.join(hyb, fov)
 				next_future = executor.submit(read_cim, file)
 				if future:
-					result = future.result()
-					yield result
+					yield future.result()
 				future = next_future
 		if future:
 			yield future.result()
@@ -132,39 +139,4 @@ def save_data_dapi(save_folder, path, icol, Xh_plus, Xh_minus):
 	os.makedirs(save_folder, exist_ok=True)
 	cp.savez_compressed(save_fl, Xh_plus=Xh_plus, Xh_minus=Xh_minus)
 	del Xh_plus, Xh_minus
-
-
-
-
-import collections
-def buffered_image_generator(hybs, fovs, buffer_size=2):
-	buffer = collections.deque(maxlen=buffer_size)
-
-	# Helper to get next image
-	def get_next_image():
-		for all_flds, fov in zip(hybs, fovs):
-			for hyb in all_flds:
-				file = os.path.join(hyb, fov)
-				for fov in fovs:
-					path = os.path.join(hyb, fov)
-					yield read_cim(path)
-
-	image_iter = get_next_image()
-
-	# Pre-fill buffer
-	for _ in range(buffer_size):
-		try:
-			buffer.append(next(image_iter))
-		except StopIteration:
-			break
-
-	# Yield from buffer while filling it
-	while buffer:
-		current_image = buffer.popleft()
-		yield current_image
-
-		try:
-			buffer.append(next(image_iter))
-		except StopIteration:
-			pass
 

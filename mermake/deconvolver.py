@@ -4,6 +4,8 @@ from itertools import zip_longest, chain, repeat, cycle
 import cupy as cp
 import numpy as np
 
+from . import blur
+
 def repeat_last(iterable):
 	it = iter(iterable)
 	try:
@@ -84,6 +86,8 @@ class Deconvolver:
 			self.tile_pad = xp.empty((2*zpad + self.tile_height, *shape), dtype=xp.float32)
 			self.tile_res = xp.empty((		 self.tile_height, *shape), dtype=xp.float32)
 			self.tile_fft = xp.empty_like(self.tile_pad, dtype=xp.complex64)
+			self.tile_buf = xp.empty_like(self.tile_res)
+
 		self.overlap = overlap
 		self.zpad = zpad
 		self.xp = xp
@@ -105,7 +109,7 @@ class Deconvolver:
 			for (x,y,tile),(_,_,flat),psf_fft in zip(tiles, flats, psf_ffts):
 				tile_pad[	 : zpad,  :, :] = tile[zpad-1::-1, :, :]
 				tile_pad[ zpad:-zpad, :, :] = tile
-				tile_pad[-zpad:	    , :, :] = tile[-1:-zpad-1:-1, :, :]
+				tile_pad[-zpad:		, :, :] = tile[-1:-zpad-1:-1, :, :]
 		
 				cp.divide(tile_pad[zpad:-zpad], flat, out=tile_pad[zpad:-zpad])
 					
@@ -117,7 +121,7 @@ class Deconvolver:
 			for (x,y,tile),psf_fft in zip(tiles, psf_ffts):
 				tile_pad[	 : zpad,  :, :] = tile[zpad-1::-1, :, :]
 				tile_pad[ zpad:-zpad, :, :] = tile
-				tile_pad[-zpad:	    , :, :] = tile[-1:-zpad-1:-1, :, :]
+				tile_pad[-zpad:		, :, :] = tile[-1:-zpad-1:-1, :, :]
 	
 				tile_fft[:] = xp.fft.fftn(tile_pad)
 				xp.multiply(tile_fft, psf_fft, out=tile_fft)
@@ -135,6 +139,29 @@ class Deconvolver:
 				output[:,x:x+self.tile_size,y:y+self.tile_size] = tile[:,self.overlap:-self.overlap,self.overlap:-self.overlap]
 		stream.synchronize()
 		return output
+
+	def apply_and_blur(self, image, flat_field=None, output=None, blur_radius=50):
+		xp = cp.get_array_module(image)
+		if output is None:
+			output = xp.empty_like(image, dtype=xp.float32)
+		buffer = self.tile_buf
+
+		stream = cp.cuda.Stream(non_blocking=True)
+		with stream:
+			for x, y, tile, _ in self.tile_wise(image, flat_field=flat_field):
+				# First pass: blur in axis 1
+				blur.box_1d(tile, blur_radius, axis=1, output=buffer)
+				blur.box_1d(buffer, blur_radius, axis=2, output=buffer)
+
+				# subtract the bluured background from tile inplace
+				xp.subtract(tile, buffer, out=tile)
+				# Write to output
+				output[:, x:x+self.tile_size, y:y+self.tile_size] = \
+					tile[:, self.overlap:-self.overlap, self.overlap:-self.overlap]
+
+		stream.synchronize()
+		return output
+
 
 
 	def tiled(self, image):

@@ -4,31 +4,17 @@ import concurrent.futures
 import time
 
 # put this first to make sure to capture the correct gpu
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # Change "1" to the desired GPU ID
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"  # Change "1" to the desired GPU ID
 import cupy as cp
 cp.cuda.Device(0).use() # The above export doesnt always work so force CuPy to use GPU 0
 import numpy as np
 import cv2
 
 from mermake.deconvolver import Deconvolver
-from mermake.maxima import find_local_maxima
-#from other.maxim import find_local_maxima
+#from mermake.maxima import find_local_maxima
+from other.maxima import find_local_maxima
 from mermake.io import image_generator, save_data, save_data_dapi, get_files
 import mermake.blur as blur
-
-def profile():
-	import gc
-	mempool = cp.get_default_memory_pool()
-	# Loop through all objects in the garbage collector
-	for obj in gc.get_objects():
-		if isinstance(obj, cp.ndarray):
-			# Check if it's a view (not a direct memory allocation)
-			if obj.base is not None:
-				# Skip views as they do not allocate new memory
-				continue
-			print(f"CuPy array with shape {obj.shape} and dtype {obj.dtype}")
-			print(f"Memory usage: {obj.nbytes / 1024**2:.2f} MB")  # Convert to MB
-	print(f"Used memory after: {mempool.used_bytes() / 1024**2:.2f} MB")
 
 if __name__ == "__main__":
 
@@ -41,7 +27,7 @@ if __name__ == "__main__":
 	items = [(set_,ifov) for set_ in ['_set1'] for ifov in range(1,5)]
 	hybs = list()
 	fovs = list()
-	for item in items[:4]:
+	for item in items:
 		all_flds,fov = get_files(master_data_folders, item, iHm=iHm, iHM=iHM)
 		hybs.append(all_flds)
 		fovs.append(fov)
@@ -61,22 +47,24 @@ if __name__ == "__main__":
 	psfs = np.load(psf_file, allow_pickle=True)
 
 	# this mimics the behavior if there is only a single psf
-	#key = (0,1500,1500)
-	#psfs = { key : psfs[key] }
+	key = (0,1500,1500)
+	psfs = { key : psfs[key] }
 	
 	# settings
-	tile_size = 300
+	tile_size = 500
 	overlap = 89
 	# these can be very large objects in gpu ram, adjust accoringly to suit gpu specs
 	hybs_deconvolver = Deconvolver(psfs, shape[1:], tile_size=tile_size, overlap=overlap, zpad=39, beta=0.0001)
-	dapi_deconvolver = Deconvolver(psfs, shape[1:], tile_size=tile_size, overlap=overlap-10, zpad=19, beta=0.01)
+	dapi_deconvolver = Deconvolver(psfs, shape[1:], tile_size=tile_size, overlap=overlap-50, zpad=19, beta=0.01)
 
 	# the save file executor to do the saving in parallel with computations
 	executor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
 
 	deconv = cp.empty(shape[1:], dtype=cp.float32)	
-	buffer_channel = cp.empty(shape[1:], dtype=cp.float32)	
+	#buffer_channel = cp.empty(shape[1:], dtype=cp.float32)	
 	buffer_tile = cp.empty( (shape[1], tile_size+2*overlap, tile_size+2*overlap), dtype=cp.float32 )
+
+	#from other.io import stream_based_prefetcher
 	for cim in image_generator(hybs, fovs):
 		print(cim[0].path, flush=True)
 		for icol in [0,1,2]:
@@ -101,21 +89,18 @@ if __name__ == "__main__":
 			cp.cuda.runtime.deviceSynchronize()
 			executor.submit(save_data, save_folder, view.path, icol, Xhf)
 			view.clear()
-			del view, Xh, Xhf
-			#cp._default_memory_pool.free_all_blocks()
+			del view, Xhf, Xh
+			cp._default_memory_pool.free_all_blocks()
 
-		view = cim[3]
-		flat = im_med[3]
-		del cim
 		cp._default_memory_pool.free_all_blocks()
-		cp.cuda.runtime.deviceSynchronize()
-		
 		# now do dapi, but first clear some stuff from gpu ram to fit in 12GB
 		# Deconvolve in-place into `deconv`
-		dapi_deconvolver.apply(view, flat_field=flat, output=deconv)
-		blur.box_1d(deconv, 50, axis=1, output=buffer_channel)
-		blur.box_1d(buffer_channel, 50, axis=2, output=buffer_channel)
-		cp.subtract(deconv, buffer_channel, out=deconv)
+		view = cim[3]
+		flat = im_med[3]
+		dapi_deconvolver.apply_and_blur(view, flat_field=flat, output=deconv, blur_radius=50)
+		#blur.box_1d(deconv, 50, axis=1, output=buffer_channel)
+		#blur.box_1d(buffer_channel, 50, axis=2, output=buffer_channel)
+		#cp.subtract(deconv, buffer_channel, out=deconv)
 		std_val = float(cp.asnumpy(cp.linalg.norm(deconv.ravel()) / cp.sqrt(deconv.size)))
 		cp.divide(deconv, std_val, out=deconv)
 		Xh_plus = find_local_maxima(deconv, 3.0, 5, 5, sigmaZ = 1, sigmaXY = 1.5, raw = view )
@@ -124,8 +109,8 @@ if __name__ == "__main__":
 		cp.cuda.runtime.deviceSynchronize()
 		executor.submit(save_data_dapi, save_folder, view.path, icol, Xh_plus, Xh_minus)
 		view.clear()
-		del view
-		#cp._default_memory_pool.free_all_blocks()
+		del cim, view, Xh_plus, Xh_minus
+		cp._default_memory_pool.free_all_blocks()
 
 
 

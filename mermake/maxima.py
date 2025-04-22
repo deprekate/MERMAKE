@@ -10,57 +10,8 @@ with open(cu_path, "r") as f:
 
 # Define the kernels separately
 local_maxima_kernel = cp.RawKernel(kernel_code, "local_maxima")
-delta_fit_kernel = cp.RawKernel(kernel_code, "delta_fit")
+#delta_fit_kernel = cp.RawKernel(kernel_code, "delta_fit")
 delta_fit_cross_corr_kernel = cp.RawKernel(kernel_code, "delta_fit_cross_corr")
-
-
-import itertools
-def compute_crosscorr_score(image, raw, z_out, x_out, y_out, delta_fit, sigmaZ, sigmaXY):
-	coords = cp.stack([z_out, x_out, y_out], axis=1)  # shape (N, 3)
-	n_points = coords.shape[0]
-
-	# Step 1: Spherical offsets within radius delta_fit
-	offsets = []
-	for dz, dx, dy in itertools.product(range(-delta_fit, delta_fit + 1), repeat=3):
-		if dz*dz + dx*dx + dy*dy <= delta_fit*delta_fit:
-			offsets.append((dz, dx, dy))
-	offsets = cp.array(offsets, dtype=cp.int32)  # shape (P, 3)
-	Xft = offsets.astype(cp.float32)
-	P = Xft.shape[0]
-
-	# Step 2: Build absolute coordinates
-	neighborhood = coords[:, None, :] + offsets[None, :, :]  # shape (N, P, 3)
-
-	def reflect_index(index, max_val):
-		index = cp.where(index < 0, -index, index)  # reflect negative
-		index = cp.where(index >= max_val, 2 * max_val - index - 2, index)  # reflect over bounds
-		return index
-
-
-	zi = reflect_index(neighborhood[..., 0], image.shape[0]).astype(cp.int32)
-	xi = reflect_index(neighborhood[..., 1], image.shape[1]).astype(cp.int32)
-	yi = reflect_index(neighborhood[..., 2], image.shape[2]).astype(cp.int32)
-
-
-	# Step 3: Compute Gaussian weights
-	sigma = cp.array([sigmaZ, sigmaXY, sigmaXY], dtype=cp.float32)[None, :]
-	Xft_scaled = Xft / sigma
-	norm_G = cp.exp(-cp.sum(Xft_scaled * Xft_scaled, axis=-1) / 2.0)  # shape (P,)
-	norm_G = (norm_G - norm_G.mean()) / norm_G.std()
-
-	# Step 4: Sample the image at all (zi, xi, yi)
-	sample = image[zi, xi, yi]  # shape (N, P)
-
-	# Step 5: Normalize sample rows and compute correlation
-	sample_norm = (sample - sample.mean(axis=1, keepdims=True)) / sample.std(axis=1, keepdims=True)
-	hn = cp.mean(sample_norm * norm_G[None, :], axis=1)  # shape (N,)
-
-	# sample the raw image
-	sample = raw[zi, xi, yi]  # shape (N, P)
-	sample_norm = (sample - sample.mean(axis=1, keepdims=True)) / sample.std(axis=1, keepdims=True)
-	a = cp.mean(sample_norm * norm_G[None, :], axis=1)  # shape (N,)
-
-	return hn,a
 
 
 def find_local_maxima(image, threshold, delta, delta_fit, raw=None, sigmaZ=1, sigmaXY=1.5 ):
@@ -140,11 +91,3 @@ if __name__ == "__main__":
 	print(local)
 	print(cp.min(local, axis=0))
 	print(cp.max(local, axis=0))
-	exit()
-	start = time.time()
-	old = get_local_maxfast_tensor(im,th_fit=0.97,im_raw=im,dic_psf=None,delta=1,delta_fit=3,sigmaZ=1,sigmaXY=1.5,gpu=False)
-	end = time.time()
-	print(f"time: {end - start:.6f} seconds")
-	#tem = get_local_maxfast(im,th_fit=0.97,im_raw=im,dic_psf=None,delta=1,delta_fit=3,sigmaZ=1,sigmaXY=1.5)
-	print('old.shape', old.shape)
-	print(old)
