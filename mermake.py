@@ -117,18 +117,10 @@ if __name__ == "__main__":
 	usage = '%s [-opt1, [-opt2, ...]] config.toml' % __file__
 	parser = CustomArgumentParser(description='',formatter_class=argparse.RawTextHelpFormatter,usage=usage)
 	parser.add_argument('config', type=is_valid_file, help='config file')
-	#parser.add_argument('-o', '--outfile', action="store", default=sys.stdout, type=argparse.FileType('w'), help='where to write output [stdout]')
 	args = parser.parse_args()
 
 	set_data(args)
-	'''
-	for sset in sorted(args.batch):
-		for fov in sorted(args.batch[sset]):
-			block = args.batch[sset][fov]
-			print(block)
-			exit()
-	#count_hybs(args)
-	'''
+	
 	maxx = max(grid[0] for sset in args.batch.values() for fov in sset.values() for grid in [fov['grid_position']])
 	maxy = max(grid[1] for sset in args.batch.values() for fov in sset.values() for grid in [fov['grid_position']])
 
@@ -136,9 +128,8 @@ if __name__ == "__main__":
 	# Create the terminal layout
 	ui = HSplit(
 			#HSplit(
-				#Graphic(title="Graphic Example", border_color=5, height=maxs[0], width=(2*maxs[1])),
 				Grext(str(grid), title='Grext', color=1, border_color=1),
-				ColorLog(title="logs", border_color=5, text_color=Terminal().red)
+				ColorLog(title="logs", border_color=5, text_color=Terminal().white)
 			#),
 			#title='Dashing',
 	)
@@ -149,10 +140,6 @@ if __name__ == "__main__":
 	log_tile.append("Logs")
 
 	#input("Press Enter to clear the graphic...")
-
-	# Clear the graphic and render again
-	#graphic_tile.clear()
-	#ui.display()
 
 	prev_time = time()
 	terminal = Terminal()

@@ -19,12 +19,18 @@ import mermake.blur as blur
 if __name__ == "__main__":
 
 	# this is all stuff that will eventually be replaced with a toml settings file
+	#----------------------------------------------------------------------------#
+	#----------------------------------------------------------------------------#
 	psf_file = 'psfs/dic_psf_60X_cy5_Scope5.pkl'
 	master_data_folders = ['/data/07_22_2024__PFF_PTBP1']
 	save_folder = 'output_new'
 	iHm = 1 ; iHM = 16
 	shape = (4,40,3000,3000)
-	items = [(set_,ifov) for set_ in ['_set1'] for ifov in range(1,5)]
+	tile_size = 500
+	overlap = 89
+	items = [(set_,ifov) for set_ in ['_set1'] for ifov in range(1,11)]
+	#----------------------------------------------------------------------------#
+	#----------------------------------------------------------------------------#
 	hybs = list()
 	fovs = list()
 	for item in items:
@@ -50,9 +56,6 @@ if __name__ == "__main__":
 	key = (0,1500,1500)
 	psfs = { key : psfs[key] }
 	
-	# settings
-	tile_size = 500
-	overlap = 89
 	# these can be very large objects in gpu ram, adjust accoringly to suit gpu specs
 	hybs_deconvolver = Deconvolver(psfs, shape[1:], tile_size=tile_size, overlap=overlap, zpad=39, beta=0.0001)
 	dapi_deconvolver = Deconvolver(psfs, shape[1:], tile_size=tile_size, overlap=overlap-20, zpad=19, beta=0.01)
@@ -60,9 +63,8 @@ if __name__ == "__main__":
 	# the save file executor to do the saving in parallel with computations
 	executor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
 
-	deconv = cp.empty(shape[1:], dtype=cp.float32)	
-	#buffer_channel = cp.empty(shape[1:], dtype=cp.float32)	
-	#buffer_tile = cp.empty( (shape[1], tile_size+2*overlap, tile_size+2*overlap), dtype=cp.float32 )
+	# this is a buffer to use for copying into 
+	buffer = cp.empty(shape[1:], dtype=cp.float32)	
 
 	#from other.io import stream_based_prefetcher
 	for cim in image_generator(hybs, fovs):
@@ -73,11 +75,6 @@ if __name__ == "__main__":
 			view = cim[icol]
 			flat = im_med[icol]
 			for x,y,tile,raw in hybs_deconvolver.tile_wise(view, flat, blur_radius=30):
-				# do two separate 1d blurs for now, put into a method later
-				# i think a blur with the output also being the input works?
-				#blur.box_1d(tile, 30, axis=1, output=buffer_tile)
-				#blur.box_1d(buffer_tile, 30, axis=2, output=buffer_tile)
-				#cp.subtract(tile, buffer_tile, out=tile)
 				Xh = find_local_maxima(tile, 3600.0, 1, 3, sigmaZ = 1, sigmaXY = 1.5, raw = raw)
 				keep = cp.all((Xh[:,1:3] >= overlap) & (Xh[:,1:3] < tile_size + overlap), axis=-1)
 				Xh = Xh[keep]
@@ -94,18 +91,16 @@ if __name__ == "__main__":
 
 		cp._default_memory_pool.free_all_blocks()
 		# now do dapi, but first clear some stuff from gpu ram to fit in 12GB
-		# Deconvolve in-place into `deconv`
 		view = cim[3]
 		flat = im_med[3]
-		dapi_deconvolver.apply(view, flat_field=flat, blur_radius=50, output=deconv)
-		#blur.box_1d(deconv, 50, axis=1, output=buffer_channel)
-		#blur.box_1d(buffer_channel, 50, axis=2, output=buffer_channel)
-		#cp.subtract(deconv, buffer_channel, out=deconv)
-		std_val = float(cp.asnumpy(cp.linalg.norm(deconv.ravel()) / cp.sqrt(deconv.size)))
-		cp.divide(deconv, std_val, out=deconv)
-		Xh_plus = find_local_maxima(deconv, 3.0, 5, 5, sigmaZ = 1, sigmaXY = 1.5, raw = view )
-		cp.multiply(deconv, -1, out=deconv)
-		Xh_minus = find_local_maxima(deconv, 3.0, 5, 5, sigmaZ = 1, sigmaXY = 1.5, raw = view )
+		# Deconvolve in-place into the buffer
+		dapi_deconvolver.apply(view, flat_field=flat, blur_radius=50, output=buffer)
+		# the dapi channel is further normalized by the stdev
+		std_val = float(cp.asnumpy(cp.linalg.norm(buffer.ravel()) / cp.sqrt(buffer.size)))
+		cp.divide(buffer, std_val, out=buffer)
+		Xh_plus = find_local_maxima(buffer, 3.0, 5, 5, sigmaZ = 1, sigmaXY = 1.5, raw = view )
+		cp.multiply(buffer, -1, out=buffer)
+		Xh_minus = find_local_maxima(buffer, 3.0, 5, 5, sigmaZ = 1, sigmaXY = 1.5, raw = view )
 		cp.cuda.runtime.deviceSynchronize()
 		executor.submit(save_data_dapi, save_folder, view.path, icol, Xh_plus, Xh_minus)
 		view.clear()
