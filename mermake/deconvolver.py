@@ -103,7 +103,7 @@ class Deconvolver:
 		# use cycle to repeat the single PSF or iterate normally if multiple PSFs exist
 		psf_ffts = cycle(self.psf_fft) if len(self.psf_fft) == 1 else iter(self.psf_fft)
 		tiles = self.tiled(image)
-		flats = cycle([None]) if flat_field is None else self.tiled(flat_field[np.newaxis])
+		flats = cycle([(None,None,None)]) if flat_field is None else self.tiled(flat_field[np.newaxis])
 		
 		# the big loop
 		for (x,y,tile),(_,_,flat),psf_fft in zip(tiles, flats, psf_ffts):

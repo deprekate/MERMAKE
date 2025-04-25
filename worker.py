@@ -1,7 +1,49 @@
 import os
 import sys
+import glob
+import argparse
+import contextlib
+from time import sleep,time
+from typing import Generator
+# Try to import the appropriate TOML library
+if sys.version_info >= (3, 11):
+	import tomllib  # Python 3.11+ standard library
+else:
+	import tomli as tomllib  # Backport for older Python versions
+from types import SimpleNamespace
 import concurrent.futures
-import time
+
+def dict_to_namespace(d):
+	"""Recursively convert dictionary into SimpleNamespace."""
+	for key, value in d.items():
+		if isinstance(value, dict):
+			value = dict_to_namespace(value)  # Recursively convert nested dictionaries
+		elif isinstance(value, list):
+			# Handle lists of dicts
+			value = [dict_to_namespace(item) if isinstance(item, dict) else item for item in value] 
+		d[key] = value
+	return SimpleNamespace(**d)
+
+# Validator and loader for the TOML file
+def is_valid_file(path):
+	if not os.path.exists(path):
+		raise argparse.ArgumentTypeError(f"{path} does not exist.")
+	if path.endswith('.zarr'):
+		return
+	try:
+		with open(path, "rb") as f:
+			config = tomllib.load(f)
+			return config
+	except Exception as e:
+		raise argparse.ArgumentTypeError(f"Error loading TOML file {path}: {e}")
+
+class CustomArgumentParser(argparse.ArgumentParser):
+	def error(self, message):
+		# Customizing the error message
+		if "the following arguments are required: config" in message:
+			message = message.replace("config", "config.toml")
+		super().error(message)
+
 
 # put this first to make sure to capture the correct gpu
 os.environ["CUDA_VISIBLE_DEVICES"] = "1"  # Change "1" to the desired GPU ID
@@ -10,25 +52,51 @@ cp.cuda.Device(0).use() # The above export doesnt always work so force CuPy to u
 import numpy as np
 import cv2
 
+from mermake.utils import set_data
 from mermake.deconvolver import Deconvolver
 #from mermake.maxima import find_local_maxima
 from other.maxima import find_local_maxima
 from mermake.io import image_generator, save_data, save_data_dapi, get_files
 import mermake.blur as blur
 
-if __name__ == "__main__":
+def load_flats(tag):
+	from more_itertools import peekable
+	im_med = list()
+	files = glob.glob(tag + '*')
+	items = peekable(sorted(files))
+	for file in items:
+		med = np.array(np.load(file)['im'],dtype=np.float32)
+		if items.peek(default=None) is not None:
+			# the dapi flat field is not blurred
+			med = cv2.blur(med,(20,20))
+		med = med / np.median(med)
+		im_med.append(med)
+	return cp.asarray(np.stack(im_med))
 
+if __name__ == "__main__":
+	'''
+	usage = '%s [-opt1, [-opt2, ...]] config.toml' % __file__
+	parser = argparse.ArgumentParser(description='', formatter_class=argparse.RawTextHelpFormatter, usage=usage)
+	parser = CustomArgumentParser(description='',formatter_class=argparse.RawTextHelpFormatter,usage=usage)
+	parser.add_argument('config', type=is_valid_file, help='config file')
+	#parser.add_argument('-c', '--check', action="store_true", help="Check a single zarr")
+	args = parser.parse_args()
+	set_data(args)
+	print(args)
+	exit()
+	'''
 	# this is all stuff that will eventually be replaced with a toml settings file
 	#----------------------------------------------------------------------------#
 	#----------------------------------------------------------------------------#
+	flat_field_tag = 'flat_field/Scope5_med_col_raw'
 	psf_file = 'psfs/dic_psf_60X_cy5_Scope5.pkl'
 	master_data_folders = ['/data/07_22_2024__PFF_PTBP1']
-	save_folder = 'output_new'
+	save_folder = 'output_newnew'
 	iHm = 1 ; iHM = 16
 	shape = (4,40,3000,3000)
 	tile_size = 500
 	overlap = 89
-	items = [(set_,ifov) for set_ in ['_set1'] for ifov in range(1,11)]
+	items = [(set_,ifov) for set_ in ['_set1'] for ifov in range(1,13)]
 	#----------------------------------------------------------------------------#
 	#----------------------------------------------------------------------------#
 	hybs = list()
@@ -37,17 +105,7 @@ if __name__ == "__main__":
 		all_flds,fov = get_files(master_data_folders, item, iHm=iHm, iHM=iHM)
 		hybs.append(all_flds)
 		fovs.append(fov)
-
-	im_med = list()
-	for icol in [0,1,2,3]:
-		fl_med = 'flat_field/Scope5_med_col_raw'+str(icol)+'.npz'
-		med = np.array(np.load(fl_med)['im'],dtype=np.float32)
-		if icol != 3:
-			# the dapi flat field is not blurred
-			med = cv2.blur(med,(20,20))
-		med = med / np.median(med)
-		im_med.append(med)
-	im_med = cp.asarray(np.stack(im_med))
+	im_med = load_flats(flat_field_tag)
 
 	# eventually make a smart psf loader method to handle the different types of psf files
 	psfs = np.load(psf_file, allow_pickle=True)

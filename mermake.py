@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import numpy as np
 from blessed import Terminal
-from dashing import HSplit,VSplit,Log,Grext
+from dashing import HSplit,VSplit,Text,Log,HGauge,Grext
 from graphic import Graphic  # Assuming the class is saved as graphic.py
 
 from coords import points
@@ -111,7 +111,11 @@ class ColorLog(Log):
 		"""Append a message with the specified text color."""
 		colored_message = self.text_color(message)
 		super().append(colored_message)
-
+class SmallHGauge(HGauge):
+    def draw(self, stdscr, colors, x, y, w, h):
+        # Only use a small portion of the height
+        small_h = 3  # Just enough for the gauge and borders
+        super().draw(stdscr, colors, x, y, small_h, w)
 
 if __name__ == "__main__":
 	usage = '%s [-opt1, [-opt2, ...]] config.toml' % __file__
@@ -127,19 +131,20 @@ if __name__ == "__main__":
 	grid = Grid(maxx+2, maxy+2)
 	# Create the terminal layout
 	ui = HSplit(
-			#HSplit(
-				Grext(str(grid), title='Grext', color=1, border_color=1),
-				ColorLog(title="logs", border_color=5, text_color=Terminal().white)
-			#),
+			Grext(str(grid), title='Grext', color=1, border_color=1),
+			VSplit(
+				SmallHGauge(label="only label", val=20, border_color=5),
+				ColorLog(title="logs", border_color=5, text_color=Terminal().white),
+			)
 			#title='Dashing',
 	)
 
 	# Access the Graphic tile
 	graphic_tile = ui.items[0]
-	log_tile = ui.items[1]
+	hgauge = ui.items[1].items[0]
+	log_tile = ui.items[1].items[1]
 	log_tile.append("Logs")
 
-	#input("Press Enter to clear the graphic...")
 
 	prev_time = time()
 	terminal = Terminal()
