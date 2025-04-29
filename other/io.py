@@ -76,7 +76,7 @@ def buffered_gpu_loader(hybs, fovs):
 
 			# Yield the containers
 			yield containers
-def stream_based_prefetcher(hybs, fovs):
+def stream_based_prefetcher(files):
 	"""
 	Use dedicated CUDA streams to achieve truly asynchronous operations
 	"""
@@ -85,19 +85,8 @@ def stream_based_prefetcher(hybs, fovs):
 	stream2 = cp.cuda.Stream(non_blocking=True)
 	streams = [stream1, stream2]
 	
-	# Build list of files
-	file_list = []
-	for all_flds, fov in zip(hybs, fovs):
-		for hyb in all_flds:
-			file = os.path.join(hyb, fov)
-			file_list.append(file)
-	
-	if not file_list:
-		return
-	
 	# Preload first file (blocking)
-	print("Preloading first file...", flush=True)
-	im0 = read_im(file_list[0])
+	im0 = read_im(files[0])
 	
 	# Function to create containers using specific stream
 	def make_containers(im, path, stream_idx):
@@ -107,21 +96,13 @@ def stream_based_prefetcher(hybs, fovs):
 			container = Container(channels)
 			container.path = path
 			results = container
-			# this is to put each channel in an object so they can be
-			# incrementally deleted from gpu ram
-			#for icol in range(im.shape[0]):
-			#	chan = cp.asarray(im[icol])
-			#	container = Container(chan)
-			#	container.path = path
-			#	container.channel = icol
-			#	results.append(container)
 		return results
 	
 	# Start the first transfer on stream1
-	containers0 = make_containers(im0, file_list[0], 0)
+	containers0 = make_containers(im0, files[0], 0)
 	
 	# For remaining files
-	for i in range(1, len(file_list)):
+	for i in range(1, len(files)):
 		# Determine which stream to use for current and next operations
 		current_stream_idx = (i-1) % 2
 		next_stream_idx = i % 2
@@ -129,7 +110,7 @@ def stream_based_prefetcher(hybs, fovs):
 		# Start loading next file while current file is being processed
 		import threading
 		next_im = [None]
-		next_path = file_list[i]
+		next_path = files[i]
 		
 		def load_next():
 			next_im[0] = read_im(next_path)

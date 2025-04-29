@@ -9,27 +9,6 @@ from setuptools.command.build_ext import build_ext
 from distutils import sysconfig
 import subprocess
 
-message = (
-	"\n" + "=" * 80 + "\n"
-	+ "=" * 80 + "\n"
-	+ "=" * 80 + "\n"
-	"WARNING: This package uses CuPy, which requires the CUDA Toolkit.\n"
-	"Make sure you have installed the correct version of CUDA for your GPU.\n"
-	"See: https://docs.cupy.dev/en/stable/install.html\n"
-	+ "=" * 80 + "\n"
-	+ "=" * 80 + "\n"
-	+ "=" * 80
-)
-result = None
-try:
-	result = subprocess.run(['nvcc', '--version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-	if result.returncode == 0:
-		pass
-	else:
-		raise Exception
-except Exception as e:
-	raise OSError(message) from None
-
 def readme():
 	with open("README.md", "r") as fh:
 		long_desc = fh.read()
@@ -78,7 +57,7 @@ def main():
 		],
 		python_requires='>3.5.2',
 		packages=find_packages(),
-		include_package_data=True,  # <-- important!
+		include_package_data=True,
 		package_data={"mermake": ["*.cu"]},
 		install_requires=['numpy','dask', cupy_package()],
 		#ext_modules = [module],

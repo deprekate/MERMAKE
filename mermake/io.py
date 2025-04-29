@@ -84,24 +84,25 @@ class Container:
 		if hasattr(self, 'data') and self.data is not None:
 			del self.data
 			self.data = None
-def read_cim(path):
-	""" store channels as separate objects so tey can be sequentially deleted from ram"""
-	im = read_im(path)  # shape: (n_channels, z, y, x)
-	channel_containers = []
-	for icol in range(im.shape[0]):
-		chan = cp.asarray(im[icol])
-		container = Container(chan)
-		container.path = path
-		container.channel = icol
-		channel_containers.append(container)
-	return channel_containers  # List[Container]
 
 #def read_cim(path):
-#	im = read_im(path)
-#	cim = cp.asarray(im)
-#	container = Container(cim)
-#	container.path = path
-#	return container
+#	""" store channels as separate objects so tey can be sequentially deleted from ram"""
+#	im = read_im(path)  # shape: (n_channels, z, y, x)
+#	channel_containers = []
+#	for icol in range(im.shape[0]):
+#		chan = cp.asarray(im[icol])
+#		container = Container(chan)
+#		container.path = path
+#		container.channel = icol
+#		channel_containers.append(container)
+#	return channel_containers  # List[Container]
+
+def read_cim(path):
+	im = read_im(path)
+	cim = cp.asarray(im)
+	container = Container(cim)
+	container.path = path
+	return container
 
 import concurrent.futures
 def image_generator(hybs, fovs):
@@ -115,6 +116,18 @@ def image_generator(hybs, fovs):
 				if future:
 					yield future.result()
 				future = next_future
+		if future:
+			yield future.result()
+
+def image_prefetcher(files):
+	"""Generator that prefetches the next image while processing the current one."""
+	with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+		future = None
+		for file in files:
+			next_future = executor.submit(read_cim, file)
+			if future:
+				yield future.result()
+			future = next_future
 		if future:
 			yield future.result()
 

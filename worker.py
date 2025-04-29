@@ -13,6 +13,22 @@ else:
 from types import SimpleNamespace
 import concurrent.futures
 
+# put this first to make sure to capture the correct gpu
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"  # Change "1" to the desired GPU ID
+import cupy as cp
+cp.cuda.Device(0).use() # The above export doesnt always work so force CuPy to use GPU 0
+import numpy as np
+import cv2
+
+from mermake.utils import set_data
+from mermake.deconvolver import Deconvolver
+#from mermake.maxima import find_local_maxima  # uses more gpu ram
+from other.maxima import find_local_maxima     # slightly slower
+from mermake.io import image_generator, save_data, save_data_dapi, get_files, image_prefetcher
+import mermake.blur as blur
+
+
+
 def dict_to_namespace(d):
 	"""Recursively convert dictionary into SimpleNamespace."""
 	for key, value in d.items():
@@ -45,33 +61,58 @@ class CustomArgumentParser(argparse.ArgumentParser):
 		super().error(message)
 
 
-# put this first to make sure to capture the correct gpu
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"  # Change "1" to the desired GPU ID
-import cupy as cp
-cp.cuda.Device(0).use() # The above export doesnt always work so force CuPy to use GPU 0
-import numpy as np
-import cv2
-
-from mermake.utils import set_data
-from mermake.deconvolver import Deconvolver
-#from mermake.maxima import find_local_maxima
-from other.maxima import find_local_maxima
-from mermake.io import image_generator, save_data, save_data_dapi, get_files
-import mermake.blur as blur
 
 def load_flats(tag):
 	from more_itertools import peekable
-	im_med = list()
+	stack = list()
 	files = glob.glob(tag + '*')
-	items = peekable(sorted(files))
-	for file in items:
-		med = np.array(np.load(file)['im'],dtype=np.float32)
-		if items.peek(default=None) is not None:
-			# the dapi flat field is not blurred
-			med = cv2.blur(med,(20,20))
-		med = med / np.median(med)
-		im_med.append(med)
-	return cp.asarray(np.stack(im_med))
+	for file in files:
+		im = np.load(file)['im']
+		cim = cp.array(im,dtype=cp.float32)
+		blurred = blur.box(cim, (20,20))
+		blurred = blurred / cp.median(blurred)
+		stack.append(blurred)
+	return cp.stack(stack)
+
+def find_files(paths, hyb_range):
+
+	import re
+	# I guess brute force the matching
+	# Regular expression to match the filename pattern
+	pattern = r'H(\d+)_([^_]+)_set(\d+)'
+	# Split the range into start and end parts
+	start, end = hyb_range.split(':')
+	# Match the start and end using regex
+	match_start = re.match(pattern, start)
+	match_end = re.match(pattern, end)
+	# Extract the components from the matches
+	start_prefix, start_middle, start_set = match_start.groups()
+	end_prefix, end_middle, end_set = match_end.groups()
+	# Convert the numeric parts to integers for the range generation
+	start_num = int(start_prefix)  # Strip 'H' and convert to int
+	end_num = int(end_prefix)
+	start_set = int(start_set)
+	end_set = int(end_set)
+	
+	# Generate the list of acceptable names
+	names = list()
+	for i in range(start_num, end_num + 1):
+		for j in range(start_set, end_set + 1):
+			name = f'H{i}_{start_middle}_set{j}'
+			names.append(name)
+	names = set(names)
+
+	# Iterate over the zarrs to see which match the previous names
+	matches = list()
+	for path in paths:
+		files = glob.glob(os.path.join(path,'*','*.zarr'))
+		for file in files:
+			dirname = os.path.basename(os.path.dirname(file))
+			if dirname in names:
+				matches.append(file)
+	return matches
+
+
 
 if __name__ == "__main__":
 	'''
@@ -91,21 +132,19 @@ if __name__ == "__main__":
 	flat_field_tag = 'flat_field/Scope5_med_col_raw'
 	psf_file = 'psfs/dic_psf_60X_cy5_Scope5.pkl'
 	master_data_folders = ['/data/07_22_2024__PFF_PTBP1']
-	save_folder = 'output_newnew'
+	save_folder = 'output_new'
 	iHm = 1 ; iHM = 16
+	hyb_range = 'H1_AER_set1:H16_AER_set1'
 	shape = (4,40,3000,3000)
-	tile_size = 500
+	tile_size = 300
 	overlap = 89
-	items = [(set_,ifov) for set_ in ['_set1'] for ifov in range(1,13)]
 	#----------------------------------------------------------------------------#
 	#----------------------------------------------------------------------------#
-	hybs = list()
-	fovs = list()
-	for item in items:
-		all_flds,fov = get_files(master_data_folders, item, iHm=iHm, iHM=iHM)
-		hybs.append(all_flds)
-		fovs.append(fov)
-	im_med = load_flats(flat_field_tag)
+	flats = load_flats(flat_field_tag)
+	
+	files = find_files(master_data_folders, hyb_range)
+	files = sorted(files)[1:20]
+	# maybe do check here if files have already been processed
 
 	# eventually make a smart psf loader method to handle the different types of psf files
 	psfs = np.load(psf_file, allow_pickle=True)
@@ -124,15 +163,18 @@ if __name__ == "__main__":
 	# this is a buffer to use for copying into 
 	buffer = cp.empty(shape[1:], dtype=cp.float32)	
 
-	#from other.io import stream_based_prefetcher
-	for cim in image_generator(hybs, fovs):
-		print(cim[0].path, flush=True)
+	from other.io import stream_based_prefetcher
+	#queue = stream_based_prefetcher(files)
+	queue = image_prefetcher(files)
+
+	for chans in queue:
+		print(chans.path, flush=True)
 		for icol in [0,1,2]:
 			# there is probably a better way to do the Xh stacking
 			Xhf = list()
-			view = cim[icol]
-			flat = im_med[icol]
-			for x,y,tile,raw in hybs_deconvolver.tile_wise(view, flat, blur_radius=30):
+			chan = chans[icol]
+			flat = flats[icol]
+			for x,y,tile,raw in hybs_deconvolver.tile_wise(chan, flat, blur_radius=30):
 				Xh = find_local_maxima(tile, 3600.0, 1, 3, sigmaZ = 1, sigmaXY = 1.5, raw = raw)
 				keep = cp.all((Xh[:,1:3] >= overlap) & (Xh[:,1:3] < tile_size + overlap), axis=-1)
 				Xh = Xh[keep]
@@ -142,27 +184,27 @@ if __name__ == "__main__":
 			Xhf = [x for x in Xhf if x.shape[0] > 0]
 			Xhf = cp.vstack(Xhf)
 			cp.cuda.runtime.deviceSynchronize()
-			executor.submit(save_data, save_folder, view.path, icol, Xhf)
-			view.clear()
-			del view, Xhf, Xh
+			executor.submit(save_data, save_folder, chans.path, icol, Xhf)
+			#chan.clear()
+			del chan, Xhf, Xh
 			cp._default_memory_pool.free_all_blocks()
 
 		cp._default_memory_pool.free_all_blocks()
 		# now do dapi, but first clear some stuff from gpu ram to fit in 12GB
-		view = cim[3]
-		flat = im_med[3]
+		chan = chans[-1]
+		flat = flats[-1]
 		# Deconvolve in-place into the buffer
-		dapi_deconvolver.apply(view, flat_field=flat, blur_radius=50, output=buffer)
+		dapi_deconvolver.apply(chan, flat_field=flat, blur_radius=50, output=buffer)
 		# the dapi channel is further normalized by the stdev
 		std_val = float(cp.asnumpy(cp.linalg.norm(buffer.ravel()) / cp.sqrt(buffer.size)))
 		cp.divide(buffer, std_val, out=buffer)
-		Xh_plus = find_local_maxima(buffer, 3.0, 5, 5, sigmaZ = 1, sigmaXY = 1.5, raw = view )
+		Xh_plus = find_local_maxima(buffer, 3.0, 5, 5, sigmaZ = 1, sigmaXY = 1.5, raw = chan )
 		cp.multiply(buffer, -1, out=buffer)
-		Xh_minus = find_local_maxima(buffer, 3.0, 5, 5, sigmaZ = 1, sigmaXY = 1.5, raw = view )
+		Xh_minus = find_local_maxima(buffer, 3.0, 5, 5, sigmaZ = 1, sigmaXY = 1.5, raw = chan )
 		cp.cuda.runtime.deviceSynchronize()
-		executor.submit(save_data_dapi, save_folder, view.path, icol, Xh_plus, Xh_minus)
-		view.clear()
-		del cim, view, Xh_plus, Xh_minus
+		executor.submit(save_data_dapi, save_folder, chans.path, icol, Xh_plus, Xh_minus)
+		#chan.clear()
+		del chan, chans, Xh_plus, Xh_minus
 		cp._default_memory_pool.free_all_blocks()
 
 
