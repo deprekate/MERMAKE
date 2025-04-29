@@ -389,26 +389,22 @@ void delta_fit_cross_corr(
     hn /= count;
     a /= count;
 
-    // Calculate weighted centroid
-    // Initialize sum for weighted centroid calculation
+    // Initialize sums for weighted centroid calculation
     float sum_weighted = 0.0f;
-    for (int i = 0; i < count; i++) {
-        sum_weighted += sample_vals[i];
-    }
-
-    // Calculate weighted centroid
     float center_z = 0.0f;
     float center_x = 0.0f;
     float center_y = 0.0f;
 
+    // Important: Store the original z+d1, x+d2, y+d3 values, not the reflected/bounded values
+    for (int i = 0; i < count; i++) {
+        // Use z0+dz, not z_vals which has been reflected for bounds
+        center_z += (z0 + dz_vals[i]) * sample_vals[i];
+        center_x += (x0 + dx_vals[i]) * sample_vals[i];
+        center_y += (y0 + dy_vals[i]) * sample_vals[i];
+        sum_weighted += sample_vals[i];
+    }
+
     if (sum_weighted > 0) {
-        // Match Python implementation exactly:
-        // Use absolute coordinates times intensity for weighted average
-        for (int i = 0; i < count; i++) {
-            center_z += z_vals[i] * sample_vals[i];
-            center_x += x_vals[i] * sample_vals[i];
-            center_y += y_vals[i] * sample_vals[i];
-        }
         center_z /= sum_weighted;
         center_x /= sum_weighted;
         center_y /= sum_weighted;
