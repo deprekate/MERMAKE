@@ -118,18 +118,56 @@ def image_generator(hybs, fovs):
 				future = next_future
 		if future:
 			yield future.result()
+import concurrent.futures
 
-def image_prefetcher(files):
-	"""Generator that prefetches the next image while processing the current one."""
-	with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-		future = None
-		for file in files:
-			next_future = executor.submit(read_cim, file)
-			if future:
-				yield future.result()
-			future = next_future
-		if future:
-			yield future.result()
+class ImageQueue:
+    def __init__(self, files):
+        """
+        Initialize the prefetcher.
+
+        Parameters
+        ----------
+        files : list of str
+            List of file paths to load.
+        """
+        self.files = iter(files)
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        self.future = None
+        self.shape = None
+        self.dtype = None
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self.future is None:
+            # First call: preload first image
+            try:
+                file = next(self.files)
+            except StopIteration:
+                raise StopIteration
+            self.future = self.executor.submit(read_cim, file)
+
+        # Fetch result from previous future
+        image = self.future.result()
+
+        # Prefetch next
+        try:
+            file = next(self.files)
+            self.future = self.executor.submit(read_cim, file)
+        except StopIteration:
+            self.future = None  # No more images
+
+        # On first image, store shape and dtype
+        if self.shape is None:
+            self.shape = image.shape
+            self.dtype = image.dtype
+
+        return image
+
+    def close(self):
+        """Clean up the thread pool."""
+        self.executor.shutdown(wait=True)
 
 
 from pathlib import Path

@@ -302,7 +302,7 @@ void delta_fit_cross_corr(
 	output[idx * 8 + 2] = center_y;
 	output[idx * 8 + 3] = min_val;  // background
 	output[idx * 8 + 4] = a;		// Cross-correlation with raw
-	output[idx * 8 + 5] = image[center_idx];
+	output[idx * 8 + 5] = (float)raw[center_idx];
 	output[idx * 8 + 6] = hn;	   // Cross-correlation with image
-	output[idx * 8 + 7] = (float)raw[center_idx];
+	output[idx * 8 + 7] = image[center_idx];
 }

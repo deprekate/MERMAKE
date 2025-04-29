@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import concurrent.futures
 
 # put this first to make sure to capture the correct gpu
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"  # Change "1" to the desired GPU ID
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # Change "1" to the desired GPU ID
 import cupy as cp
 cp.cuda.Device(0).use() # The above export doesnt always work so force CuPy to use GPU 0
 import numpy as np
@@ -22,9 +22,9 @@ import cv2
 
 from mermake.utils import set_data
 from mermake.deconvolver import Deconvolver
-#from mermake.maxima import find_local_maxima  # uses more gpu ram
-from other.maxima import find_local_maxima     # slightly slower
-from mermake.io import image_generator, save_data, save_data_dapi, get_files, image_prefetcher
+from mermake.maxima import find_local_maxima  # uses more gpu ram
+#from other.maxima import find_local_maxima     # slightly slower
+from mermake.io import image_generator, save_data, save_data_dapi, get_files
 import mermake.blur as blur
 
 
@@ -150,8 +150,8 @@ if __name__ == "__main__":
 	psfs = np.load(psf_file, allow_pickle=True)
 
 	# this mimics the behavior if there is only a single psf
-	key = (0,1500,1500)
-	psfs = { key : psfs[key] }
+	#key = (0,1500,1500)
+	#psfs = { key : psfs[key] }
 	
 	# these can be very large objects in gpu ram, adjust accoringly to suit gpu specs
 	hybs_deconvolver = Deconvolver(psfs, shape[1:], tile_size=tile_size, overlap=overlap, zpad=39, beta=0.0001)
@@ -163,9 +163,10 @@ if __name__ == "__main__":
 	# this is a buffer to use for copying into 
 	buffer = cp.empty(shape[1:], dtype=cp.float32)	
 
-	from other.io import stream_based_prefetcher
+	#from other.io import stream_based_prefetcher
 	#queue = stream_based_prefetcher(files)
-	queue = image_prefetcher(files)
+	from mermake.io import ImageQueue
+	queue = ImageQueue(files)
 
 	for chans in queue:
 		print(chans.path, flush=True)

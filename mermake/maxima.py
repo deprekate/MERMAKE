@@ -30,6 +30,8 @@ def find_local_maxima(image, threshold, delta, delta_fit, raw=None, sigmaZ=1, si
 	#if not image.flags.c_contiguous:
 	#	print('not contiguous')
 	#	image = cp.ascontiguousarray(image)
+	if delta > 5:	
+		raise TypeError("Delta must be an less than or equal to 5 due to MAX_KERNEL_POINTS")
 
 	depth, height, width = image.shape
 	max_points = depth * height * width

@@ -246,8 +246,20 @@ class Deconvolver:
 
 def full_deconv(image, psfs, flat_field = None, tile_size=300, zpad = None, overlap = 89, beta = 0.001):
 	xp = cp.get_array_module(image)
+
 	shape = image.shape
 	if zpad is None:
 		zpad = shape[0]
 	deconvolver = Deconvolver(psfs, image_shape=shape, zpad=zpad, tile_size=tile_size, overlap=overlap, beta=beta)
-	return deconvolver.apply(image, flat_field)
+	deconv = deconvolver.apply(image, flat_field)
+
+	del deconvolver
+	gc.collect()  # Standard Python garbage collection
+	if xp == cp:
+		cp._default_memory_pool.free_all_blocks()  # Free standard GPU memory pool
+		cp._default_pinned_memory_pool.free_all_blocks()  # Free pinned memory pool
+		cp.cuda.runtime.deviceSynchronize()  # Ensure all operations are completed
+	return deconv
+
+
+
