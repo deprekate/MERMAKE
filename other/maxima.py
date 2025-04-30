@@ -23,6 +23,9 @@ def find_local_maxima(image, threshold, delta, delta_fit, raw=None, sigmaZ=1, si
 	# Ensure raw is also contiguous
 	#if raw is not None and not raw.flags.c_contiguous:
 	#	raw = cp.ascontiguousarray(raw)
+
+	if delta > 5:
+		raise TypeError("Delta must be an less than or equal to 5 due to MAX_KERNEL_POINTS")
 	
 	depth, height, width = image.shape
 	total_voxels = depth * height * width

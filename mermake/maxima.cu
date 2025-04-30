@@ -1,4 +1,75 @@
 extern "C" __global__
+void local_maxima_count(const float* image, float threshold, int delta,
+				  unsigned int* count,
+				  int depth, int height, int width, int max_points) {
+	// Get flattened index
+	int idx = blockDim.x * blockIdx.x + threadIdx.x;
+	if (idx >= depth * height * width) {
+		return;
+	}
+
+	// Convert flat index to 3D coordinates
+	int z = idx / (height * width);
+	int temp = idx % (height * width);
+	int x = temp / width;
+	int y = temp % width;
+
+
+	// Check if above threshold
+	if (image[idx] <= threshold) {
+		return;
+	}
+
+	// Check if it's a local maximum in the neighborhood
+	bool is_max = true;
+	for (int dz = -delta; dz <= delta; dz++) {
+		for (int dx = -delta; dx <= delta; dx++) {
+			for (int dy = -delta; dy <= delta; dy++) {
+				// Skip the center point
+				if (dz == 0 && dx == 0 && dy == 0) {
+					continue;
+				}
+
+				// Check if within spherical mask
+				if ((dz*dz + dx*dx + dy*dy) > (delta*delta)) {
+					continue;
+				}
+
+				int nz = z + dz;
+				int nx = x + dx;
+				int ny = y + dy;
+				
+
+				// Apply reflect only if out of bounds
+				if (nz < 0 || nz >= depth) {
+					nz = (nz < 0) ? -nz : 2 * depth - nz - 2;
+				}
+				if (nx < 0 || nx >= height) {
+					nx = (nx < 0) ? -nx : 2 * height - nx - 2;
+				}
+				if (ny < 0 || ny >= width) {
+					ny = (ny < 0) ? -ny : 2 * width - ny - 2;
+				}
+
+				if (image[idx] < image[nz * height * width + nx * width + ny]) {
+					is_max = false;
+					break;
+				}
+			}
+			if (!is_max) break;
+		}
+		if (!is_max) break;
+	}
+
+	if (is_max) {
+		// If it's a local maximum, count it
+		atomicAdd(count, 1);
+	}
+}
+
+
+
+extern "C" __global__
 void local_maxima(const float* image, float threshold, int delta, int delta_fit,
 				  unsigned short* z_out, unsigned short* x_out, unsigned short* y_out,
 				  unsigned int* count,
@@ -72,6 +143,7 @@ void local_maxima(const float* image, float threshold, int delta, int delta_fit,
 		}
 	}
 }
+
 
 #define MAX_KERNEL_POINTS 515
 extern "C" __global__
