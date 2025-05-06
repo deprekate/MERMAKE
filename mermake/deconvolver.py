@@ -43,9 +43,9 @@ def batch_laplacian_fft(batch_size, shape):
 
 
 class Deconvolver:
-	def __init__(self, psfs, image_shape, tile_size=300, zpad=0, overlap = 89, beta = 0.001, xp = cp):
+	def __init__(self, psfs, image_shape, tile_size=300, zpad=0, overlap=89, beta=0.001, xp=cp, **kwargs):
 		self.tile_size = tile_size
-		self.tile_height = image_shape[0]
+		self.tile_height = image_shape[1]
 
 		if len(psfs) == 1:
 			# old single psf method
@@ -82,9 +82,9 @@ class Deconvolver:
 
 		# Preallocate tile arrays
 		if tile_size:
-			shape = (tile_size + 2*overlap, tile_size + 2*overlap)
-			self.tile_pad = xp.empty((2*zpad + self.tile_height, *shape), dtype=xp.float32)
-			self.tile_res = xp.empty((		 self.tile_height, *shape), dtype=xp.float32)
+			tile_shape = (tile_size + 2*overlap, tile_size + 2*overlap)
+			self.tile_pad = xp.empty((2*zpad + self.tile_height, *tile_shape), dtype=xp.float32)
+			self.tile_res = xp.empty((         self.tile_height, *tile_shape), dtype=xp.float32)
 			self.tile_fft = xp.empty_like(self.tile_pad, dtype=xp.complex64)
 			self.tile_buf = xp.empty_like(self.tile_res)
 
@@ -92,7 +92,7 @@ class Deconvolver:
 		self.zpad = zpad
 		self.xp = xp
 
-	def tile_wise(self, image, flat_field=None, blur_radius=None):
+	def tile_wise(self, image, flat_field=None, blur_radius=None, **kwargs):
 		xp = cp.get_array_module(image)
 		zpad = self.zpad
 		tile_pad = self.tile_pad
@@ -104,12 +104,15 @@ class Deconvolver:
 		psf_ffts = cycle(self.psf_fft) if len(self.psf_fft) == 1 else iter(self.psf_fft)
 		tiles = self.tiled(image)
 		flats = cycle([(None,None,None)]) if flat_field is None else self.tiled(flat_field[np.newaxis])
-		
+	
+		z = image.shape[0]
 		# the big loop
 		for (x,y,tile),(_,_,flat),psf_fft in zip(tiles, flats, psf_ffts):
 			# reflect padding along the z axis
 			tile_pad[	 : zpad,  :, :] = tile[zpad-1::-1, :, :]
 			tile_pad[ zpad:-zpad, :, :] = tile
+			# this will allow iamge with different z to not errir
+			#tile_pad[ zpad:zpad+z, :, :] = tile
 			tile_pad[-zpad:		, :, :] = tile[-1:-zpad-1:-1, :, :]
 	
 			# flat field correction

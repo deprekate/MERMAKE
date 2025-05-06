@@ -14,7 +14,7 @@ local_maxima_kernel = cp.RawKernel(kernel_code, "local_maxima")
 #delta_fit_kernel = cp.RawKernel(kernel_code, "delta_fit")
 delta_fit_cross_corr_kernel = cp.RawKernel(kernel_code, "delta_fit_cross_corr")
 
-def find_local_maxima(image, threshold, delta, delta_fit, raw=None, sigmaZ=1, sigmaXY=1.5):
+def find_local_maxima(image, threshold, delta, delta_fit=0, raw=None, sigmaZ=1, sigmaXY=1.5, **kwargs):
 	# Ensure the image is in C-contiguous order for the kernel
 	#if not image.flags.c_contiguous:
 	#	print('not contiguous')

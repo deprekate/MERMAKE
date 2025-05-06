@@ -11,6 +11,10 @@ else:
 	import tomli as tomllib  # Backport for older Python versions
 from types import SimpleNamespace
 
+import psutil
+import pynvml
+pynvml.nvmlInit()
+handle = pynvml.nvmlDeviceGetHandleByIndex(0)
 
 import numpy as np
 from blessed import Terminal
@@ -20,9 +24,9 @@ from graphic import Graphic  # Assuming the class is saved as graphic.py
 from coords import points
 from coords import points_to_coords
 
+from mermake.io import set_data
 sys.path.pop(0)
-sys.path.append('mermake')
-from utils import *
+#sys.path.append('mermake')
 
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing
@@ -41,6 +45,44 @@ def dict_to_namespace(d):
 		d[key] = value
 	return SimpleNamespace(**d)
 
+toml_text = "
+[paths]
+codebook = '/home/katelyn/develop/MERMAKE/codebooks/codebook_code_color2__ExtraAaron_8_6_blank.csv' ### 
+psf_file = '/home/katelyn/develop/MERMAKE/psfs/dic_psf_60X_cy5_Scope5.pkl'  ### Scope5 psf
+flat_field_tag = '/home/katelyn/develop/MERMAKE/flat_field/Scope5_'
+hyb_range = 'H1_AER_set1:H16_AER_set1'
+hyb_folders = [
+                '/data/07_22_2024__PFF_PTBP1',
+                ]
+output_folder = '/home/katelyn/develop/MERMAKE/MERFISH_Analysis_AER'
+
+#---------------------------------------------------------------------------------------#
+#---------------------------------------------------------------------------------------#
+#           you probably dont have to change any of the settings below                  #
+#---------------------------------------------------------------------------------------#
+#---------------------------------------------------------------------------------------#
+[hybs]
+tile_size = 300
+overlap = 89
+beta = 0.0001
+threshold = 3600
+blur_radius = 30
+delta = 1
+delta_fit = 3
+sigmaZ = 1
+sigmaXY = 1.5
+
+[dapi]
+tile_size = 300
+overlap = 89
+beta = 0.01
+threshold = 3.0
+blur_radius = 50
+delta = 5
+delta_fit = 5
+sigmaZ = 1
+sigmaXY = 1.5
+"
 
 # Validator and loader for the TOML file
 def is_valid_file(path):
@@ -58,6 +100,7 @@ class CustomArgumentParser(argparse.ArgumentParser):
 		# Customizing the error message
 		if "the following arguments are required: config" in message:
 			message = message.replace("config", "config.toml")
+		message += toml_text
 		super().error(message)
 
 
@@ -118,11 +161,16 @@ class SmallHGauge(HGauge):
         super().draw(stdscr, colors, x, y, small_h, w)
 
 if __name__ == "__main__":
-	usage = '%s [-opt1, [-opt2, ...]] config.toml' % __file__
+	usage = '%s [-opt1, [-opt2, ...]] settings.toml' % __file__
+	#parser = argparse.ArgumentParser(description='', formatter_class=argparse.RawTextHelpFormatter, usage=usage)
 	parser = CustomArgumentParser(description='',formatter_class=argparse.RawTextHelpFormatter,usage=usage)
-	parser.add_argument('config', type=is_valid_file, help='config file')
+	parser.add_argument('settings', type=is_valid_file, help='settings file')
+	#parser.add_argument('-c', '--check', action="store_true", help="Check a single zarr")
 	args = parser.parse_args()
-
+	# Convert settings to namespace and attach each top-level section to args
+	for key, value in vars(dict_to_namespace(args.settings)).items():
+		setattr(args, key, value)
+	#----------------------------------------------------------------------------#
 	set_data(args)
 	
 	maxx = max(grid[0] for sset in args.batch.values() for fov in sset.values() for grid in [fov['grid_position']])
@@ -133,7 +181,9 @@ if __name__ == "__main__":
 	ui = HSplit(
 			Grext(str(grid), title='Grext', color=1, border_color=1),
 			VSplit(
-				SmallHGauge(label="only label", val=20, border_color=5),
+				SmallHGauge(label="cpu usage ", val=20, border_color=5),
+				SmallHGauge(label="gpu ram usage ", val=20, border_color=5),
+				SmallHGauge(label="gpu utilization ", val=20, border_color=5),
 				ColorLog(title="logs", border_color=5, text_color=Terminal().white),
 			)
 			#title='Dashing',
@@ -141,8 +191,10 @@ if __name__ == "__main__":
 
 	# Access the Graphic tile
 	graphic_tile = ui.items[0]
-	hgauge = ui.items[1].items[0]
-	log_tile = ui.items[1].items[1]
+	hgauge0 = ui.items[1].items[0]
+	hgauge1 = ui.items[1].items[1]
+	hgauge2 = ui.items[1].items[2]
+	log_tile = ui.items[1].items[3]
 	log_tile.append("Logs")
 
 
@@ -156,7 +208,16 @@ if __name__ == "__main__":
 				point = args.batch[sset][fov]['stage_position']
 				grid.set(coord[0], coord[1],  terminal.yellow('■'))
 				graphic_tile.text = str(grid)
-				log_tile.append(str(coord))
+				log_tile.append('Processing: fov' + str(coord))
+				hgauge0.value = psutil.cpu_percent(interval=1)
+				mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+				mem_total = mem_info.total # / (1024 ** 3)
+				mem_used = mem_info.used #/ (1024 ** 3)
+				mem_free = mem_info.free #/ (1024 ** 3)
+				gpu = pynvml.nvmlDeviceGetUtilizationRates(handle)
+				hgauge1.value = 100 * mem_used / mem_total
+				hgauge2.value = gpu.gpu
+				
 				ui.display()
 				sleep(1.0/10)
 		log_tile.append("Checking hyb data....")

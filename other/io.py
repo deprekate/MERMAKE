@@ -6,11 +6,202 @@ import cupy as cp
 from mermake.deconvolver import Deconvolver
 from mermake.maxima import find_local_maxima
 import mermake.blur as blur
-from mermake.io import get_files, image_generator, read_im, Container
+from mermake.io import get_files, image_generator, Container, read_im
 import concurrent.futures
 import time
 
 import numpy as np
+
+import os
+import numpy as np
+import zarr
+import cupy as cp
+import concurrent.futures
+import queue
+import time
+import threading
+from contextlib import contextmanager
+import os
+import numpy as np
+import zarr
+import cupy as cp
+import concurrent.futures
+import queue
+import time
+import threading
+from contextlib import contextmanager
+class Container:
+    def __init__(self, data, **kwargs):
+        """Store the array and metadata"""
+        self.data = data
+        self.metadata = kwargs
+        
+    def __getitem__(self, item):
+        """Allow indexing into the container"""
+        return self.data[item]
+        
+    def __array__(self):
+        """Return the underlying array"""
+        return self.data
+        
+    def __repr__(self):
+        """Custom string representation"""
+        return f"Container(shape={self.data.shape}, dtype={self.data.dtype}, metadata={self.metadata})"
+        
+    def __getattr__(self, name):
+        """Delegate attribute access to the underlying data"""
+        if hasattr(self.data, name):
+            return getattr(self.data, name)
+        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+        
+    def clear(self):
+        """Explicitly delete the CuPy array and synchronize"""
+        if hasattr(self, 'data') and self.data is not None:
+            # Ensure we're synchronized before deletion
+            cp.cuda.runtime.deviceSynchronize()
+            del self.data
+            self.data = None
+            # Try to free memory using the appropriate method
+            try:
+                cp._default_memory_pool.free_all_blocks()
+            except:
+                try:
+                    cp.get_default_memory_pool().free_all_blocks()
+                except:
+                    pass
+
+def read_cim(path):
+    """Read image and transfer to GPU"""
+    im = read_im(path)
+    
+    # Ensure we're using the default device
+    with cp.cuda.Device(0):
+        # Force a memory cleanup before loading a new image
+        try:
+            cp._default_memory_pool.free_all_blocks()
+        except:
+            try:
+                cp.get_default_memory_pool().free_all_blocks()
+            except:
+                pass
+        
+        # Transfer to GPU
+        cim = cp.asarray(im)
+        
+        # Make sure the transfer is complete
+        cp.cuda.runtime.deviceSynchronize()
+    
+    container = Container(cim)
+    container.path = path
+    return container
+
+class ImageQueue:
+    """Simple but effective asynchronous image queue"""
+    
+    def __init__(self, files, max_workers=2, retry_count=3):
+        """
+        Initialize the image queue with files to process.
+        
+        Args:
+            files: Iterable of file paths
+            max_workers: Number of worker threads
+            retry_count: Number of times to retry loading an image if it fails
+        """
+        self.files = list(files) if not isinstance(files, list) else files
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+        self.retry_count = retry_count
+        
+        # Preload the first image with retries
+        try:
+            first_file = self.files.pop(0)
+        except IndexError:
+            raise ValueError("No image files provided.")
+        
+        # Try loading with retries
+        first_image = None
+        error = None
+        
+        for attempt in range(self.retry_count):
+            try:
+                future = self.executor.submit(read_cim, first_file)
+                first_image = future.result()
+                error = None
+                break
+            except Exception as e:
+                error = e
+                print(f"Attempt {attempt+1} failed for {first_file}: {str(e)}")
+                sleep(1)  # Small delay before retry
+        
+        if first_image is None:
+            raise ValueError(f"Failed to load first image after {self.retry_count} attempts: {str(error)}")
+        
+        self._first_image = first_image
+        self.shape = self._first_image.shape
+        self.dtype = self._first_image.dtype
+        
+        # Start prefetching the next image if there are more files
+        self.future = None
+        if self.files:
+            next_file = self.files.pop(0)
+            self.future = self.executor.submit(read_cim, next_file)
+    
+    def __iter__(self):
+        return self
+    
+    def __next__(self):
+        """Get the next image, with prefetching of the subsequent one"""
+        # Return the preloaded first image if it's available
+        if self._first_image is not None:
+            image = self._first_image
+            self._first_image = None
+            return image
+        
+        # If no future is pending, we're done
+        if self.future is None:
+            raise StopIteration
+        
+        # Try to get the current future's result
+        try:
+            image = self.future.result()
+        except Exception as e:
+            print(f"Error loading image: {str(e)}")
+            # If there are more files, skip this one and try another
+            if self.files:
+                next_file = self.files.pop(0)
+                self.future = self.executor.submit(read_cim, next_file)
+                return self.__next__()  # Recursive call to try again
+            else:
+                self.future = None
+                raise StopIteration
+        
+        # Prefetch the next image in the background
+        self.future = None
+        if self.files:
+            next_file = self.files.pop(0)
+            self.future = self.executor.submit(read_cim, next_file)
+        
+        return image
+    
+    def close(self):
+        """Clean up resources"""
+        if self._first_image is not None:
+            self._first_image.clear()
+            self._first_image = None
+        
+        # Cancel any pending future
+        if self.future is not None and not self.future.done():
+            self.future.cancel()
+        
+        self.executor.shutdown(wait=False)
+        
+        # Final memory cleanup
+        try:
+            cp._default_memory_pool.free_all_blocks()
+        except:
+            try:
+                cp.get_default_memory_pool().free_all_blocks()
+            except:
+                pass
 
 def buffered_gpu_loader(hybs, fovs):
 	"""

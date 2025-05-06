@@ -1,16 +1,36 @@
-[[codebooks]]
-name = 'AER'
-codebook_path = '/home/katelyn/MERMAKE/codebooks/codebook_code_color2__ExtraAaron_8_6_blank.csv' ### 
-hyb_pattern = 'H([0-9]|1[0-6])_AER_set1'
+[paths]
+codebook = '/home/katelyn/develop/MERMAKE/codebooks/codebook_code_color2__ExtraAaron_8_6_blank.csv' ### 
+psf_file = '/home/katelyn/develop/MERMAKE/psfs/dic_psf_60X_cy5_Scope5.pkl'  ### Scope5 psf
+flat_field_tag = '/home/katelyn/develop/MERMAKE/flat_field/Scope5_'
+hyb_range = 'H1_AER_set1:H16_AER_set1'
 hyb_folders = [
 				'/data/07_22_2024__PFF_PTBP1',
 				]
-psf_file = '/home/katelyn/MERMAKE/psfs/dic_psf_60X_cy5_Scope5.pkl'  ### Scope5 psf
-flat_field_tag = '/home/katelyn/MERMAKE/flat_field/Scope5_'
-output_folder = '/home/katelyn/MERMAKE/MERFISH_Analysis_AER'
+output_folder = '/home/katelyn/develop/MERMAKE/MERFISH_Analysis_AER'
 
-# you can have multiple codebooks
-#[[codebooks]]
-#name = 'MER'
-#path = 'C:/Scripts/NMERFISH/codebooks/codebook_0_New_DCBB-300_MERFISH_encoding_2_21_2023' ### 
+#---------------------------------------------------------------------------------------#
+#---------------------------------------------------------------------------------------#
+#           you probably dont have to change any of the settings below                  #
+#---------------------------------------------------------------------------------------#
+#---------------------------------------------------------------------------------------#
+   [hybs]
+tile_size = 300
+overlap = 89
+beta = 0.0001
+threshold = 3600
+blur_radius = 30
+delta = 1
+delta_fit = 3
+sigmaZ = 1
+sigmaXY = 1.5
 
+[dapi]
+tile_size = 300
+overlap = 89
+beta = 0.01
+threshold = 3.0
+blur_radius = 50
+delta = 5
+delta_fit = 5
+sigmaZ = 1
+sigmaXY = 1.5

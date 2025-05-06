@@ -18,54 +18,88 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # Change "1" to the desired GPU ID
 import cupy as cp
 cp.cuda.Device(0).use() # The above export doesnt always work so force CuPy to use GPU 0
 import numpy as np
-import cv2
 
-from mermake.utils import set_data
+#sys.path.pop(0)
 from mermake.deconvolver import Deconvolver
-from mermake.maxima import find_local_maxima  # uses more gpu ram
-#from other.maxima import find_local_maxima     # slightly slower
-from mermake.io import image_generator, save_data, save_data_dapi, get_files
+from mermake.maxima import find_local_maxima
+from mermake.io import image_generator, save_data, save_data_dapi, get_files, find_files
+from mermake.io import ImageQueue
 import mermake.blur as blur
 
-
-
 def dict_to_namespace(d):
-	"""Recursively convert dictionary into SimpleNamespace."""
-	for key, value in d.items():
-		if isinstance(value, dict):
-			value = dict_to_namespace(value)  # Recursively convert nested dictionaries
-		elif isinstance(value, list):
-			# Handle lists of dicts
-			value = [dict_to_namespace(item) if isinstance(item, dict) else item for item in value] 
-		d[key] = value
-	return SimpleNamespace(**d)
+    """Recursively convert dictionary into SimpleNamespace."""
+    for key, value in d.items():
+        if isinstance(value, dict):
+            value = dict_to_namespace(value)
+        elif isinstance(value, list):
+            value = [dict_to_namespace(i) if isinstance(i, dict) else i for i in value]
+        d[key] = value
+    return SimpleNamespace(**d)
 
-# Validator and loader for the TOML file
+# Validator for the TOML file
 def is_valid_file(path):
-	if not os.path.exists(path):
-		raise argparse.ArgumentTypeError(f"{path} does not exist.")
-	if path.endswith('.zarr'):
-		return
-	try:
-		with open(path, "rb") as f:
-			config = tomllib.load(f)
-			return config
-	except Exception as e:
-		raise argparse.ArgumentTypeError(f"Error loading TOML file {path}: {e}")
+    if not os.path.exists(path):
+        raise argparse.ArgumentTypeError(f"{path} does not exist.")
+    try:
+        with open(path, "rb") as f:
+            return tomllib.load(f)  # Return raw dict
+    except Exception as e:
+        raise argparse.ArgumentTypeError(f"Error loading TOML file {path}: {e}")
+
+toml_text = """
+        [paths]
+        codebook = '/home/katelyn/develop/MERMAKE/codebooks/codebook_code_color2__ExtraAaron_8_6_blank.csv' ###
+        psf_file = '/home/katelyn/develop/MERMAKE/psfs/dic_psf_60X_cy5_Scope5.pkl'  ### Scope5 psf
+        flat_field_tag = '/home/katelyn/develop/MERMAKE/flat_field/Scope5_'
+        hyb_range = 'H1_AER_set1:H16_AER_set1'
+        hyb_folders = [
+                        '/data/07_22_2024__PFF_PTBP1',
+                        ]
+        output_folder = '/home/katelyn/develop/MERMAKE/MERFISH_Analysis_AER'
+        
+        #---------------------------------------------------------------------------------------#
+        #---------------------------------------------------------------------------------------#
+        #           you probably dont have to change any of the settings below                  #
+        #---------------------------------------------------------------------------------------#
+        #---------------------------------------------------------------------------------------#
+        [hybs]
+        tile_size = 300
+        overlap = 89
+        beta = 0.0001
+        threshold = 3600
+        blur_radius = 30
+        delta = 1
+        delta_fit = 3
+        sigmaZ = 1
+        sigmaXY = 1.5
+        
+        [dapi]
+        tile_size = 300
+        overlap = 89
+        beta = 0.01
+        threshold = 3.0
+        blur_radius = 50
+        delta = 5
+        delta_fit = 5
+        sigmaZ = 1
+        sigmaXY = 1.5"""
 
 class CustomArgumentParser(argparse.ArgumentParser):
 	def error(self, message):
 		# Customizing the error message
-		if "the following arguments are required: config" in message:
-			message = message.replace("config", "config.toml")
+		if "the following arguments are required: settings" in message:
+			message = message.replace("settings", "settings.toml")
+		message += '\n'
+		message += 'The format for the toml file is shown below'
+		message += '\n'
+		message += toml_text
 		super().error(message)
 
 
 
-def load_flats(tag):
-	from more_itertools import peekable
+def load_flats(flat_field_tag, **kwargs):
 	stack = list()
-	files = glob.glob(tag + '*')
+	files = glob.glob(flat_field_tag + '*')
 	for file in files:
 		im = np.load(file)['im']
 		cim = cp.array(im,dtype=cp.float32)
@@ -74,109 +108,69 @@ def load_flats(tag):
 		stack.append(blurred)
 	return cp.stack(stack)
 
-def find_files(paths, hyb_range):
-
-	import re
-	# I guess brute force the matching
-	# Regular expression to match the filename pattern
-	pattern = r'H(\d+)_([^_]+)_set(\d+)'
-	# Split the range into start and end parts
-	start, end = hyb_range.split(':')
-	# Match the start and end using regex
-	match_start = re.match(pattern, start)
-	match_end = re.match(pattern, end)
-	# Extract the components from the matches
-	start_prefix, start_middle, start_set = match_start.groups()
-	end_prefix, end_middle, end_set = match_end.groups()
-	# Convert the numeric parts to integers for the range generation
-	start_num = int(start_prefix)  # Strip 'H' and convert to int
-	end_num = int(end_prefix)
-	start_set = int(start_set)
-	end_set = int(end_set)
-	
-	# Generate the list of acceptable names
-	names = list()
-	for i in range(start_num, end_num + 1):
-		for j in range(start_set, end_set + 1):
-			name = f'H{i}_{start_middle}_set{j}'
-			names.append(name)
-	names = set(names)
-
-	# Iterate over the zarrs to see which match the previous names
-	matches = list()
-	for path in paths:
-		files = glob.glob(os.path.join(path,'*','*.zarr'))
-		for file in files:
-			dirname = os.path.basename(os.path.dirname(file))
-			if dirname in names:
-				matches.append(file)
-	return matches
-
 
 
 if __name__ == "__main__":
-	'''
-	usage = '%s [-opt1, [-opt2, ...]] config.toml' % __file__
-	parser = argparse.ArgumentParser(description='', formatter_class=argparse.RawTextHelpFormatter, usage=usage)
+	usage = '%s [-opt1, [-opt2, ...]] settings.toml' % __file__
+	#parser = argparse.ArgumentParser(description='', formatter_class=argparse.RawTextHelpFormatter, usage=usage)
 	parser = CustomArgumentParser(description='',formatter_class=argparse.RawTextHelpFormatter,usage=usage)
-	parser.add_argument('config', type=is_valid_file, help='config file')
+	parser.add_argument('settings', type=is_valid_file, help='settings file')
 	#parser.add_argument('-c', '--check', action="store_true", help="Check a single zarr")
 	args = parser.parse_args()
-	set_data(args)
-	print(args)
-	exit()
-	'''
-	# this is all stuff that will eventually be replaced with a toml settings file
+	# Convert settings to namespace and attach each top-level section to args
+	for key, value in vars(dict_to_namespace(args.settings)).items():
+		setattr(args, key, value)
 	#----------------------------------------------------------------------------#
 	#----------------------------------------------------------------------------#
-	flat_field_tag = 'flat_field/Scope5_med_col_raw'
-	psf_file = 'psfs/dic_psf_60X_cy5_Scope5.pkl'
-	master_data_folders = ['/data/07_22_2024__PFF_PTBP1']
-	save_folder = 'output_new'
-	iHm = 1 ; iHM = 16
-	hyb_range = 'H1_AER_set1:H16_AER_set1'
-	shape = (4,40,3000,3000)
-	tile_size = 300
-	overlap = 89
-	#----------------------------------------------------------------------------#
-	#----------------------------------------------------------------------------#
-	flats = load_flats(flat_field_tag)
+	flats = load_flats(**vars(args.paths))
 	
-	files = find_files(master_data_folders, hyb_range)
-	files = sorted(files)[1:20]
+	files = find_files(**vars(args.paths))
 	# maybe do check here if files have already been processed
+	if False:
+		files = exclude_processed(file, **vars(args.paths)) 
+
+	files = sorted(files)[1:100]
+
+	# I still cant quite get the prefetcher 100% gpu util
+	#from other.io import stream_based_prefetcher
+	#queue = stream_based_prefetcher(files)
+	queue = ImageQueue(files)
+
+	# set some things based on input images
+	shape = queue.shape
+	ncol = shape[0]
+	zpad = shape[1] - 1 # this needs to be about the same size as the input z depth
 
 	# eventually make a smart psf loader method to handle the different types of psf files
-	psfs = np.load(psf_file, allow_pickle=True)
+	psfs = np.load(args.paths.psf_file, allow_pickle=True)
 
 	# this mimics the behavior if there is only a single psf
-	#key = (0,1500,1500)
-	#psfs = { key : psfs[key] }
+	key = (0,1500,1500)
+	psfs = { key : psfs[key] }
 	
 	# these can be very large objects in gpu ram, adjust accoringly to suit gpu specs
-	hybs_deconvolver = Deconvolver(psfs, shape[1:], tile_size=tile_size, overlap=overlap, zpad=39, beta=0.0001)
-	dapi_deconvolver = Deconvolver(psfs, shape[1:], tile_size=tile_size, overlap=overlap-20, zpad=19, beta=0.01)
+	hybs_deconvolver = Deconvolver(psfs, shape, zpad = zpad, **vars(args.hybs) )
+	# shrink the zpad to limit the loaded psfs in ram since dapi isnt deconvolved as strongly
+	dapi_deconvolver = Deconvolver(psfs, shape, zpad = zpad//2, **vars(args.dapi))
 
 	# the save file executor to do the saving in parallel with computations
-	executor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
+	executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 
 	# this is a buffer to use for copying into 
 	buffer = cp.empty(shape[1:], dtype=cp.float32)	
 
-	#from other.io import stream_based_prefetcher
-	#queue = stream_based_prefetcher(files)
-	from mermake.io import ImageQueue
-	queue = ImageQueue(files)
+	overlap = args.hybs.overlap
+	tile_size = args.hybs.tile_size
 
-	for chans in queue:
-		print(chans.path, flush=True)
-		for icol in [0,1,2]:
+	for image in queue:
+		print(image.path, flush=True)
+		for icol in range(ncol - 1):
 			# there is probably a better way to do the Xh stacking
 			Xhf = list()
-			chan = chans[icol]
+			chan = image[icol]
 			flat = flats[icol]
-			for x,y,tile,raw in hybs_deconvolver.tile_wise(chan, flat, blur_radius=30):
-				Xh = find_local_maxima(tile, 3600.0, 1, 3, sigmaZ = 1, sigmaXY = 1.5, raw = raw)
+			for x,y,tile,raw in hybs_deconvolver.tile_wise(chan, flat, **vars(args.hybs)):
+				Xh = find_local_maxima(tile, raw = raw, **vars(args.hybs))
 				keep = cp.all((Xh[:,1:3] >= overlap) & (Xh[:,1:3] < tile_size + overlap), axis=-1)
 				Xh = Xh[keep]
 				Xh[:,1] += x - overlap
@@ -185,14 +179,12 @@ if __name__ == "__main__":
 			Xhf = [x for x in Xhf if x.shape[0] > 0]
 			Xhf = cp.vstack(Xhf)
 			cp.cuda.runtime.deviceSynchronize()
-			executor.submit(save_data, save_folder, chans.path, icol, Xhf)
-			#chan.clear()
+			executor.submit(save_data, image.path, icol, Xhf, **vars(args.paths))
 			del chan, Xhf, Xh
 			cp._default_memory_pool.free_all_blocks()
 
-		cp._default_memory_pool.free_all_blocks()
-		# now do dapi, but first clear some stuff from gpu ram to fit in 12GB
-		chan = chans[-1]
+		# now do dapi
+		chan = image[-1]
 		flat = flats[-1]
 		# Deconvolve in-place into the buffer
 		dapi_deconvolver.apply(chan, flat_field=flat, blur_radius=50, output=buffer)
@@ -203,9 +195,9 @@ if __name__ == "__main__":
 		cp.multiply(buffer, -1, out=buffer)
 		Xh_minus = find_local_maxima(buffer, 3.0, 5, 5, sigmaZ = 1, sigmaXY = 1.5, raw = chan )
 		cp.cuda.runtime.deviceSynchronize()
-		executor.submit(save_data_dapi, save_folder, chans.path, icol, Xh_plus, Xh_minus)
-		#chan.clear()
-		del chan, chans, Xh_plus, Xh_minus
+		executor.submit(save_data_dapi, image.path, icol, Xh_plus, Xh_minus, **vars(args.paths))
+		image.clear()
+		del chan, Xh_plus, Xh_minus, image
 		cp._default_memory_pool.free_all_blocks()
 
 

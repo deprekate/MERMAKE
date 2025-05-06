@@ -3,10 +3,10 @@ import re
 import glob
 from pathlib import Path
 from collections import Counter
-import xml.etree.ElementTree as ET
 
 import numpy as np
 import cupy as cp
+
 
 def profile():
 	import gc
@@ -55,59 +55,6 @@ def points_to_coords(points):
 	coords = np.round(points / mean).astype(int)
 	return coords
 
-def read_xml(path):
-	# Open and parse the XML file
-	tree = None
-	with open(path, "r", encoding="ISO-8859-1") as f:
-		tree = ET.parse(f)
-	return tree.getroot()
-
-def get_xml_field(file, field):
-	xml = read_xml(file)
-	return xml.find(f".//{field}").text
-
-def set_data(args):
-	from wcmatch import glob as wc
-	from natsort import natsorted
-	group = args.config['codebooks'][0]
-	pattern = group['hyb_pattern']
-	batch = dict()
-	files = list()
-	# parse hybrid folders
-	for folder in group['hyb_folders']:
-		regex_path = os.path.join(folder, pattern, '[0-9][0-9][0-9]').replace('(','@(')
-		files.extend(wc.glob(regex_path, flags = wc.EXTGLOB))
-	for file in files:
-		sset = re.search('_set[0-9]*', file).group()
-		hyb = re.search(pattern, file).group()
-		if sset and hyb:
-			batch.setdefault(sset, {}).setdefault(os.path.basename(file), {})[hyb] = {'zarr' : file}
-	# parse xml files
-	points = list()
-	for sset in sorted(batch):
-		for fov in sorted(batch[sset]):
-			point = list()
-			for hyb,dic in natsorted(batch[sset][fov].items()):
-				path = dic['zarr']
-				dirname = os.path.dirname(path)
-				basename = os.path.basename(path)
-				file = glob.glob(os.path.join(dirname,'*' + basename + '.xml'))[0]
-				point.append(list(map(float, get_xml_field(file, 'stage_position').split(','))))
-			mean = np.mean(np.array(point), axis=0)
-			batch[sset][fov]['stage_position'] = mean
-			points.append(mean)
-	points = np.array(points)
-	mins = np.min(points, axis=0)
-	step = estimate_step_size(points)
-	#coords = points_to_coords(points)
-	for sset in sorted(batch):
-		for i,fov in enumerate(sorted(batch[sset])):
-			point = batch[sset][fov]['stage_position']
-			point -= mins
-			batch[sset][fov]['grid_position'] = np.round(point / step).astype(int)
-	args.batch = batch
-	#counts = Counter(re.search(pattern, file).group().split('_set')[0] for file in files if re.search(pattern, file))
-	#hybrid_count = {key: counts[key] for key in natsorted(counts)}
 
 def count_bits(args):
 	group = args.config['codebooks'][0]
