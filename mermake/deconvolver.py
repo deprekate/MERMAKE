@@ -131,7 +131,7 @@ class Deconvolver:
 				xp.subtract(tile_res, tile_buf, out=tile_res)
 			yield x,y,tile_res,tile
 
-	def apply(self, image, flat_field=None, blur_radius=None, output=None):
+	def apply(self, image, flat_field=None, blur_radius=None, output=None, **kwargs):
 		xp = cp.get_array_module(image)
 		if output is None:
 			output = xp.empty_like(image, dtype=xp.float32)

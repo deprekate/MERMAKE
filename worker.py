@@ -22,6 +22,7 @@ import numpy as np
 #sys.path.pop(0)
 from mermake.deconvolver import Deconvolver
 from mermake.maxima import find_local_maxima
+#from more.maxima import find_local_maxima
 from mermake.io import image_generator, save_data, save_data_dapi, get_files, find_files
 from mermake.io import ImageQueue
 import mermake.blur as blur
@@ -176,29 +177,23 @@ if __name__ == "__main__":
 				Xh[:,1] += x - overlap
 				Xh[:,2] += y - overlap
 				Xhf.append(Xh)
-			Xhf = [x for x in Xhf if x.shape[0] > 0]
-			Xhf = cp.vstack(Xhf)
-			cp.cuda.runtime.deviceSynchronize()
 			executor.submit(save_data, image.path, icol, Xhf, **vars(args.paths))
-			del chan, Xhf, Xh
-			cp._default_memory_pool.free_all_blocks()
+			del chan, Xhf # Xh
 
 		# now do dapi
 		chan = image[-1]
 		flat = flats[-1]
 		# Deconvolve in-place into the buffer
-		dapi_deconvolver.apply(chan, flat_field=flat, blur_radius=50, output=buffer)
+		dapi_deconvolver.apply(chan, flat_field=flat, output=buffer, **vars(args.dapi))
 		# the dapi channel is further normalized by the stdev
 		std_val = float(cp.asnumpy(cp.linalg.norm(buffer.ravel()) / cp.sqrt(buffer.size)))
 		cp.divide(buffer, std_val, out=buffer)
-		Xh_plus = find_local_maxima(buffer, 3.0, 5, 5, sigmaZ = 1, sigmaXY = 1.5, raw = chan )
+		Xh_plus = find_local_maxima(buffer, raw = chan, **vars(args.dapi) )
 		cp.multiply(buffer, -1, out=buffer)
-		Xh_minus = find_local_maxima(buffer, 3.0, 5, 5, sigmaZ = 1, sigmaXY = 1.5, raw = chan )
-		cp.cuda.runtime.deviceSynchronize()
-		executor.submit(save_data_dapi, image.path, icol, Xh_plus, Xh_minus, **vars(args.paths))
+		Xh_minus = find_local_maxima(buffer, raw = chan, **vars(args.dapi) )
+		# save the data
+		#executor.submit(save_data_dapi, image.path, icol, Xh_plus, Xh_minus, **vars(args.paths))
 		image.clear()
 		del chan, Xh_plus, Xh_minus, image
-		cp._default_memory_pool.free_all_blocks()
-
 
 

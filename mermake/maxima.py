@@ -14,7 +14,7 @@ local_maxima_kernel = cp.RawKernel(kernel_code, "local_maxima")
 #delta_fit_kernel = cp.RawKernel(kernel_code, "delta_fit")
 delta_fit_cross_corr_kernel = cp.RawKernel(kernel_code, "delta_fit_cross_corr")
 
-def find_local_maxima(image, threshold, delta, delta_fit=0, raw=None, sigmaZ=1, sigmaXY=1.5, **kwargs):
+def find_local_maxima(image, threshold=None, delta=1, delta_fit=0, raw=None, sigmaZ=1, sigmaXY=1.5, **kwargs):
 	# Ensure the image is in C-contiguous order for the kernel
 	#if not image.flags.c_contiguous:
 	#	print('not contiguous')
@@ -42,7 +42,10 @@ def find_local_maxima(image, threshold, delta, delta_fit=0, raw=None, sigmaZ=1, 
 	# 1st pass: Count only to help limit GPU RAM
 	local_maxima_count_kernel((blocks,), (threads,),
 		(image.ravel(), threshold, delta, count, depth, height, width, total_voxels))
-	cp.cuda.Device().synchronize()
+	# Use stream.synchronize() instead of global synchronize for better performance
+	stream = cp.cuda.get_current_stream()
+	stream.synchronize()
+	#cp.cuda.Device().synchronize()
 	
 	num = int(count.get()[0])
 	
@@ -59,7 +62,8 @@ def find_local_maxima(image, threshold, delta, delta_fit=0, raw=None, sigmaZ=1, 
 	local_maxima_kernel((blocks,), (threads,), 
 		(image.ravel(), threshold, delta, delta_fit,
 		 z_out, x_out, y_out, count, depth, height, width, num))
-	cp.cuda.Device().synchronize()
+	#cp.cuda.Device().synchronize()
+	stream.synchronize()
 	
 	# Get the actual number found
 	num_found = int(count.get()[0])
@@ -81,11 +85,11 @@ def find_local_maxima(image, threshold, delta, delta_fit=0, raw=None, sigmaZ=1, 
 		(image.ravel(), raw.ravel(), z_out, x_out, y_out, output, 
 		 num_found, depth, height, width, delta_fit, sigmaZ, sigmaXY))
 	
+	#cp.cuda.runtime.deviceSynchronize()
+	stream.synchronize()
 	# Clean up
 	del z_out, x_out, y_out
 	cp._default_memory_pool.free_all_blocks()
-	cp._default_pinned_memory_pool.free_all_blocks()
-	cp.cuda.runtime.deviceSynchronize()
 	
 	return output
 
@@ -93,9 +97,9 @@ if __name__ == "__main__":
 	import numpy as np
 	np.set_printoptions(suppress=True, linewidth=100)
 	# Example Usage
-	cim = cp.random.rand(40, 300, 300).astype(cp.float32)
+	#cim = cp.random.rand(40, 300, 300).astype(cp.float32)
+	cim = cp.random.rand(4, 4, 4).astype(cp.float32)
+	print(cim)
 	local = find_local_maxima(cim, 0.97, 1, 3, raw=cim)
 	print('local.shape',local.shape, flush=True)
 	print(local)
-	print(cp.min(local, axis=0))
-	print(cp.max(local, axis=0))

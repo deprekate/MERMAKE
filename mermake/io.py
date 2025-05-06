@@ -71,35 +71,35 @@ def get_files(master_data_folders, set_ifov,iHm=None,iHM=None):
 	return all_flds,fov
 
 def read_im(path, return_pos=False):
-    dirname = os.path.dirname(path)
-    fov = os.path.basename(path).split('_')[-1].split('.')[0]
-    file_ = os.path.join(dirname, fov, 'data')
+	dirname = os.path.dirname(path)
+	fov = os.path.basename(path).split('_')[-1].split('.')[0]
+	file_ = os.path.join(dirname, fov, 'data')
 
-    # Force eager loading from Zarr
-    z = zarr.open(file_, mode='r')
-    image = np.array(z[1:])  # use np.array(), not np.asarray()
+	# Force eager loading from Zarr
+	z = zarr.open(file_, mode='r')
+	image = np.array(z[1:])  # use np.array(), not np.asarray()
 
-    shape = image.shape
-    xml_file = os.path.splitext(path)[0] + '.xml'
-    if os.path.exists(xml_file):
-        txt = open(xml_file, 'r').read()
-        tag = '<z_offsets type="string">'
-        zstack = txt.split(tag)[-1].split('</')[0]
+	shape = image.shape
+	xml_file = os.path.splitext(path)[0] + '.xml'
+	if os.path.exists(xml_file):
+		txt = open(xml_file, 'r').read()
+		tag = '<z_offsets type="string">'
+		zstack = txt.split(tag)[-1].split('</')[0]
 
-        tag = '<stage_position type="custom">'
-        x, y = eval(txt.split(tag)[-1].split('</')[0])
+		tag = '<stage_position type="custom">'
+		x, y = eval(txt.split(tag)[-1].split('</')[0])
 
-        nchannels = int(zstack.split(':')[-1])
-        nzs = (shape[0] // nchannels) * nchannels
-        image = image[:nzs].reshape([shape[0] // nchannels, nchannels, shape[-2], shape[-1]])
-        image = image.swapaxes(0, 1)
+		nchannels = int(zstack.split(':')[-1])
+		nzs = (shape[0] // nchannels) * nchannels
+		image = image[:nzs].reshape([shape[0] // nchannels, nchannels, shape[-2], shape[-1]])
+		image = image.swapaxes(0, 1)
 
-    if image.dtype == np.uint8:
-        image = image.astype(np.float32) ** 2
+	if image.dtype == np.uint8:
+		image = image.astype(np.float32) ** 2
 
-    if return_pos:
-        return image, x, y
-    return image
+	if return_pos:
+		return image, x, y
+	return image
 
 
 class Container:
@@ -135,54 +135,54 @@ def read_cim(path):
 	return container
 
 class ImageQueue:
-    def __init__(self, files):
-        self.files = iter(files)
-        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+	def __init__(self, files):
+		self.files = iter(files)
+		self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
-        # Preload the first image
-        try:
-            first_file = next(self.files)
-        except StopIteration:
-            raise ValueError("No image files provided.")
+		# Preload the first image
+		try:
+			first_file = next(self.files)
+		except StopIteration:
+			raise ValueError("No image files provided.")
 
-        future = self.executor.submit(read_cim, first_file)
-        self._first_image = future.result()
-        self.shape = self._first_image.shape
-        self.dtype = self._first_image.dtype
+		future = self.executor.submit(read_cim, first_file)
+		self._first_image = future.result()
+		self.shape = self._first_image.shape
+		self.dtype = self._first_image.dtype
 
-        # Start prefetching the next image
-        self.future = None
-        try:
-            next_file = next(self.files)
-            self.future = self.executor.submit(read_cim, next_file)
-        except StopIteration:
-            pass
+		# Start prefetching the next image
+		self.future = None
+		try:
+			next_file = next(self.files)
+			self.future = self.executor.submit(read_cim, next_file)
+		except StopIteration:
+			pass
 
-    def __iter__(self):
-        return self
+	def __iter__(self):
+		return self
 
-    def __next__(self):
-        if self._first_image is not None:
-            image = self._first_image
-            self._first_image = None
-            return image
+	def __next__(self):
+		if self._first_image is not None:
+			image = self._first_image
+			self._first_image = None
+			return image
 
-        if self.future is None:
-            raise StopIteration
+		if self.future is None:
+			raise StopIteration
 
-        image = self.future.result()
+		image = self.future.result()
 
-        # Prefetch the next image
-        try:
-            next_file = next(self.files)
-            self.future = self.executor.submit(read_cim, next_file)
-        except StopIteration:
-            self.future = None
+		# Prefetch the next image
+		try:
+			next_file = next(self.files)
+			self.future = self.executor.submit(read_cim, next_file)
+		except StopIteration:
+			self.future = None
 
-        return image
+		return image
 
-    def close(self):
-        self.executor.shutdown(wait=True)
+	def close(self):
+		self.executor.shutdown(wait=True)
 
 def image_generator(hybs, fovs):
 	"""Generator that prefetches the next image while processing the current one."""
@@ -201,25 +201,58 @@ def image_generator(hybs, fovs):
 
 
 from pathlib import Path
+
+# Function to handle saving the file
+class SaveData:
+	def __init__(self, save_folder, hyb_pattern="{fov}--{tag}--col{icol}.npz", dapi_pattern="{fov}--{tag}--dapiFeatures.npz", **kwargs):
+		self.save_folder = save_folder
+		self.hyb_pattern = hyb_pattern
+		self.dapi_pattern = dapi_pattern
+	def path_parts(path):
+		path_obj = Path(path)
+		fov = path_obj.stem  # The filename without extension
+		tag = path_obj.parent.name  # The parent directory name (which you seem to want)
+		return fov, tag
+	def hyb(path, icol, Xhf, **kwargs):
+		filename = self.hyb_pattern.format(fov=fov, tag=tag)
+		fov,tag = path_parts(path)
+		save_fl = save_folder + os.sep + fov + '--' + tag + '--col' + str(icol) + '__Xhfits.npz'
+		os.makedirs(save_folder, exist_ok = True)
+		cp.savez_compressed(save_fl, Xh=Xhf)
+		del Xhf
+
 def path_parts(path):
 	path_obj = Path(path)
 	fov = path_obj.stem  # The filename without extension
 	tag = path_obj.parent.name  # The parent directory name (which you seem to want)
 	return fov, tag
 
-# Function to handle saving the file
-def save_data(save_folder, path, icol, Xhf, **kwargs):
+def save_data(path, icol, Xhf, output_folder, **kwargs):
 	fov,tag = path_parts(path)
-	save_fl = save_folder + os.sep + fov + '--' + tag + '--col' + str(icol) + '__Xhfits.npz'
-	os.makedirs(save_folder, exist_ok = True)
-	cp.savez_compressed(save_fl, Xh=Xhf)
+	save_fl = output_folder + os.sep + fov + '--' + tag + '--col' + str(icol) + '__Xhfits.npz'
+	os.makedirs(output_folder, exist_ok = True)
+
+	Xhf = [x for x in Xhf if x.shape[0] > 0]
+	if Xhf:
+		xp = cp.get_array_module(Xhf[0])
+		Xhf = xp.vstack(Xhf)
+	else:
+		xp = np
+		Xhf = np.array([])
+	xp.savez_compressed(save_fl, Xh=Xhf)
 	del Xhf
-def save_data_dapi(save_folder, path, icol, Xh_plus, Xh_minus, **kwargs):
+	if xp == cp:
+		xp._default_memory_pool.free_all_blocks()  # Free standard GPU memory pool
+
+def save_data_dapi(path, icol, Xh_plus, Xh_minus, output_folder, **kwargs):
+	xp = cp.get_array_module(Xh_plus)
 	fov, tag = path_parts(path)
-	save_fl = os.path.join(save_folder, f"{fov}--{tag}--dapiFeatures.npz")
-	os.makedirs(save_folder, exist_ok=True)
-	cp.savez_compressed(save_fl, Xh_plus=Xh_plus, Xh_minus=Xh_minus)
+	filepath = os.path.join(output_folder, f"{fov}--{tag}--dapiFeatures.npz")
+	os.makedirs(output_folder, exist_ok=True)
+	xp.savez_compressed(filepath, Xh_plus=Xh_plus, Xh_minus=Xh_minus)
 	del Xh_plus, Xh_minus
+	if xp == cp:
+		xp._default_memory_pool.free_all_blocks()  # Free standard GPU memory pool
 
 from .utils import *
 def read_xml(path):
