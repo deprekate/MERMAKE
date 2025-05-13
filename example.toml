@@ -3,7 +3,7 @@ codebook = '/home/katelyn/develop/MERMAKE/codebooks/codebook_code_color2__ExtraA
 psf_file = '/home/katelyn/develop/MERMAKE/psfs/psf_750_Scope3_final.npy'  ### Scope5 psf
 #psf_file = '/home/katelyn/develop/MERMAKE/psfs/dic_psf_60X_cy5_Scope5.pkl'  ### Scope5 psf
 flat_field_tag = '/home/katelyn/develop/MERMAKE/flat_field/Scope5_'
-hyb_range = 'H1_AER_set1:H16_AER_set1'
+hyb_range = 'H1_AER_set1reshape:H16_AER_set1reshape'
 hyb_folders = [
 				'/data/07_22_2024__PFF_PTBP1',
 				]
@@ -15,7 +15,7 @@ output_folder = '/home/katelyn/develop/MERMAKE/MERFISH_Analysis_AER'
 #---------------------------------------------------------------------------------------#
 hyb_save = '{fov}--{tag}--col{icol}.npz'
 dapi_save = '{fov}--{tag}--dapiFeatures.npz'
-regex = '''([A-z]+)(\d+)_([^_]+)_set(\d+)''' #use triple quotes to avoid double escape
+regex = '''([A-z]+)(\d+)_([^_]+)_set(\d+)(.*)''' #use triple quotes to avoid double escape
 
 [hybs]
 tile_size = 300
@@ -27,6 +27,7 @@ delta = 1
 delta_fit = 3
 sigmaZ = 1
 sigmaXY = 1.5
+
 
 [dapi]
 tile_size = 300

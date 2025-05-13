@@ -35,8 +35,8 @@ def find_files(hyb_folders, hyb_range, regex, **kwargs):
 	match_start = pattern.match(start)
 	match_end = pattern.match(end)
 	# Extract the components from the matches
-	start_letter, start_prefix, start_middle, start_set = match_start.groups()
-	end_letter, end_prefix, end_middle, end_set = match_end.groups()
+	start_letter, start_prefix, start_middle, start_set, start_extra = match_start.groups()
+	end_letter, end_prefix, end_middle, end_set, start_extra = match_end.groups()
 	# Convert the numeric parts to integers for the range generation
 	start_num = int(start_prefix)
 	end_num = int(end_prefix)
@@ -47,7 +47,7 @@ def find_files(hyb_folders, hyb_range, regex, **kwargs):
 	names = list()
 	for i in range(start_num, end_num + 1):
 		for j in range(start_set, end_set + 1):
-			name = f'{start_letter}{i}_{start_middle}_set{j}'
+			name = f'{start_letter}{i}_{start_middle}_set{j}{start_extra}'
 			names.append(name)
 	names = set(names)
 
