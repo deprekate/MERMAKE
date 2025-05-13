@@ -111,7 +111,7 @@ class Deconvolver:
 			# reflect padding along the z axis
 			tile_pad[	 : zpad,  :, :] = tile[zpad-1::-1, :, :]
 			tile_pad[ zpad:-zpad, :, :] = tile
-			# this will allow iamge with different z to not errir
+			# this will allow images with different z to not error
 			#tile_pad[ zpad:zpad+z, :, :] = tile
 			tile_pad[-zpad:		, :, :] = tile[-1:-zpad-1:-1, :, :]
 	
