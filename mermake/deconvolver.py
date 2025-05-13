@@ -104,6 +104,8 @@ class Deconvolver:
 		psf_ffts = cycle(self.psf_fft) if len(self.psf_fft) == 1 else iter(self.psf_fft)
 		tiles = self.tiled(image)
 		flats = cycle([(None,None,None)]) if flat_field is None else self.tiled(flat_field[np.newaxis])
+		if flat_field is not None:
+			med = cp.median(flat_field)
 	
 		z = image.shape[0]
 		# the big loop
@@ -118,6 +120,7 @@ class Deconvolver:
 			# flat field correction
 			if flat_field is not None:
 				cp.divide(tile_pad[zpad:-zpad], flat, out=tile_pad[zpad:-zpad])
+				tile_pad[zpad:-zpad] *= med
 			
 			# the fft convolution and deconvolution
 			tile_fft[:] = xp.fft.fftn(tile_pad)
