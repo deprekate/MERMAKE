@@ -12,16 +12,28 @@ import numpy as np
 
 import concurrent.futures
 
-def find_files(hyb_folders, hyb_range, **kwargs):
-	import re
+from . import blur
+
+def load_flats(flat_field_tag, **kwargs):
+	stack = list()
+	files = glob.glob(flat_field_tag + '*')
+	for file in files:
+		im = np.load(file)['im']
+		cim = cp.array(im,dtype=cp.float32)
+		blurred = blur.box(cim, (20,20))
+		blurred = blurred / cp.median(blurred)
+		stack.append(blurred)
+	return cp.stack(stack)
+
+def find_files(hyb_folders, hyb_range, regex, **kwargs):
 	# I guess brute force the matching
 	# Regular expression to match the filename pattern
-	pattern = r'(\w+)(\d+)_([^_]+)_set(\d+)'
+	pattern = re.compile(regex, re.IGNORECASE)
 	# Split the range into start and end parts
 	start, end = hyb_range.split(':')
 	# Match the start and end using regex
-	match_start = re.match(pattern, start)
-	match_end = re.match(pattern, end)
+	match_start = pattern.match(start)
+	match_end = pattern.match(end)
 	# Extract the components from the matches
 	start_letter, start_prefix, start_middle, start_set = match_start.groups()
 	end_letter, end_prefix, end_middle, end_set = match_end.groups()
@@ -48,7 +60,8 @@ def find_files(hyb_folders, hyb_range, **kwargs):
 			dirname = os.path.basename(os.path.dirname(file))
 			if dirname in names:
 				matches.append(file)
-	return matches
+
+	return sorted(matches)
 
 def get_iH(fld): return int(os.path.basename(fld).split('_')[0][1:])
 def get_files(master_data_folders, set_ifov,iHm=None,iHM=None):
@@ -71,6 +84,7 @@ def get_files(master_data_folders, set_ifov,iHm=None,iHM=None):
 	return all_flds,fov
 
 def read_im(path, return_pos=False):
+	#print(path)
 	dirname = os.path.dirname(path)
 	fov = os.path.basename(path).split('_')[-1].split('.')[0]
 	file_ = os.path.join(dirname, fov, 'data')
@@ -138,18 +152,15 @@ class ImageQueue:
 	def __init__(self, files):
 		self.files = iter(files)
 		self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-
 		# Preload the first image
 		try:
 			first_file = next(self.files)
 		except StopIteration:
 			raise ValueError("No image files provided.")
-
 		future = self.executor.submit(read_cim, first_file)
 		self._first_image = future.result()
 		self.shape = self._first_image.shape
 		self.dtype = self._first_image.dtype
-
 		# Start prefetching the next image
 		self.future = None
 		try:
@@ -166,19 +177,15 @@ class ImageQueue:
 			image = self._first_image
 			self._first_image = None
 			return image
-
 		if self.future is None:
 			raise StopIteration
-
 		image = self.future.result()
-
 		# Prefetch the next image
 		try:
 			next_file = next(self.files)
 			self.future = self.executor.submit(read_cim, next_file)
 		except StopIteration:
 			self.future = None
-
 		return image
 
 	def close(self):
@@ -190,6 +197,7 @@ def image_generator(hybs, fovs):
 		future = None
 		for all_flds, fov in zip(hybs, fovs):
 			for hyb in all_flds:
+
 				file = os.path.join(hyb, fov)
 				next_future = executor.submit(read_cim, file)
 				if future:
@@ -199,27 +207,71 @@ def image_generator(hybs, fovs):
 			yield future.result()
 
 
+class FileNameManager:
+    def __init__(self, pattern, hyb_template, dapi_template):
+        self.regex = re.compile(pattern)
+        self.hyb_template = hyb_template
+        self.dapi_template = dapi_template
 
-from pathlib import Path
+    def parse(self, name):
+        match = self.regex.match(name)
+        if not match:
+            raise ValueError(f"Filename '{name}' does not match pattern")
+        return match.groupdict()
+
+    def generate_hyb_name(self, fov, tag, icol):
+        return self.hyb_template.format(fov=fov, tag=tag, icol=icol)
+
+    def generate_dapi_name(self, fov, tag):
+        return self.dapi_template.format(fov=fov, tag=tag)
 
 # Function to handle saving the file
 class SaveData:
-	def __init__(self, save_folder, hyb_pattern="{fov}--{tag}--col{icol}.npz", dapi_pattern="{fov}--{tag}--dapiFeatures.npz", **kwargs):
+	def __init__(self, save_folder, hyb_save, dapi_save, **kwargs):
+		os.makedirs(save_folder, exist_ok=True)
 		self.save_folder = save_folder
 		self.hyb_pattern = hyb_pattern
 		self.dapi_pattern = dapi_pattern
-	def path_parts(path):
+
+	def path_parts(self, path):
 		path_obj = Path(path)
-		fov = path_obj.stem  # The filename without extension
-		tag = path_obj.parent.name  # The parent directory name (which you seem to want)
+		fov = path_obj.stem
+		tag = path_obj.parent.name
 		return fov, tag
-	def hyb(path, icol, Xhf, **kwargs):
-		filename = self.hyb_pattern.format(fov=fov, tag=tag)
-		fov,tag = path_parts(path)
-		save_fl = save_folder + os.sep + fov + '--' + tag + '--col' + str(icol) + '__Xhfits.npz'
-		os.makedirs(save_folder, exist_ok = True)
-		cp.savez_compressed(save_fl, Xh=Xhf)
+
+	def hyb(self, path, icol, Xhf, **kwargs):
+		fov, tag = self.path_parts(path)
+		filename = self.hyb_pattern.format(fov=fov, tag=tag, icol=icol)
+		filepath = os.path.join(self.save_folder, filename)
+
+		Xhf = [x for x in Xhf if x.shape[0] > 0]
+		if Xhf:
+			xp = cp.get_array_module(Xhf[0])
+			Xhf = xp.vstack(Xhf)
+		else:
+			xp = np
+			Xhf = np.array([])
+		xp.savez_compressed(filepath, Xh=Xhf)
 		del Xhf
+		if xp == cp:
+			xp._default_memory_pool.free_all_blocks()
+
+	def dapi(self, path, icol, Xhf, **kwargs):
+		fov, tag = self.path_parts(path)
+		filename = self.dapi_pattern.format(fov=fov, tag=tag, icol=icol)
+		filepath = os.path.join(self.save_folder, filename)
+	
+		Xhf = [x for x in Xhf if x.shape[0] > 0]
+		if Xhf:
+			xp = cp.get_array_module(Xhf[0])
+			Xhf = xp.vstack(Xhf)
+		else:
+			xp = np
+			Xhf = np.array([])
+		xp.savez_compressed(filepath, Xh=Xhf)
+		del Xhf
+		if xp == cp:
+			xp._default_memory_pool.free_all_blocks()
 
 def path_parts(path):
 	path_obj = Path(path)

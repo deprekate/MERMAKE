@@ -45,7 +45,7 @@ def dict_to_namespace(d):
 		d[key] = value
 	return SimpleNamespace(**d)
 
-toml_text = "
+toml_text = '''
 [paths]
 codebook = '/home/katelyn/develop/MERMAKE/codebooks/codebook_code_color2__ExtraAaron_8_6_blank.csv' ### 
 psf_file = '/home/katelyn/develop/MERMAKE/psfs/dic_psf_60X_cy5_Scope5.pkl'  ### Scope5 psf
@@ -82,7 +82,7 @@ delta = 5
 delta_fit = 5
 sigmaZ = 1
 sigmaXY = 1.5
-"
+'''
 
 # Validator and loader for the TOML file
 def is_valid_file(path):

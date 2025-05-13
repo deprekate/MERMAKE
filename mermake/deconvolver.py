@@ -47,14 +47,14 @@ class Deconvolver:
 		self.tile_size = tile_size
 		self.tile_height = image_shape[1]
 
-		if len(psfs) == 1:
-			# old single psf method
-			batch_size = (image_shape[-1] // tile_size) ** 2
-			psf_stack = self.center_psf(next(iter(psfs.values())))
-			psf_stack = self.center_psf(next(iter(psfs.values())))[None, ...]
-		else:
+		if isinstance(psfs, dict):
 			# new method using multiple psfs taken across fov
 			psf_stack = np.stack(list(map(self.center_psf, list(psfs.values()))))
+		else:
+			# old single psf method
+			batch_size = (image_shape[-1] // tile_size) ** 2
+			psf_stack = self.center_psf(psfs)
+			psf_stack = self.center_psf(psfs)[None, ...]
 		psf_stack = np.pad(psf_stack, ((0, 0), (zpad, zpad), (overlap, overlap), (overlap, overlap)), mode='constant')
 		shift = -np.array(psf_stack.shape[1:]) // 2
 		psf_stack[:] = np.roll(psf_stack, shift=shift, axis=(1,2,3))

@@ -16,14 +16,14 @@ import concurrent.futures
 # put this first to make sure to capture the correct gpu
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # Change "1" to the desired GPU ID
 import cupy as cp
-cp.cuda.Device(0).use() # The above export doesnt always work so force CuPy to use GPU 0
+#cp.cuda.Device(0).use() # The above export doesnt always work so force CuPy to use GPU 0
 import numpy as np
 
 #sys.path.pop(0)
 from mermake.deconvolver import Deconvolver
 from mermake.maxima import find_local_maxima
 #from more.maxima import find_local_maxima
-from mermake.io import image_generator, save_data, save_data_dapi, get_files, find_files
+from mermake.io import image_generator, save_data, save_data_dapi, get_files, find_files, load_flats
 from mermake.io import ImageQueue
 import mermake.blur as blur
 
@@ -98,17 +98,6 @@ class CustomArgumentParser(argparse.ArgumentParser):
 
 
 
-def load_flats(flat_field_tag, **kwargs):
-	stack = list()
-	files = glob.glob(flat_field_tag + '*')
-	for file in files:
-		im = np.load(file)['im']
-		cim = cp.array(im,dtype=cp.float32)
-		blurred = blur.box(cim, (20,20))
-		blurred = blurred / cp.median(blurred)
-		stack.append(blurred)
-	return cp.stack(stack)
-
 
 
 if __name__ == "__main__":
@@ -126,15 +115,14 @@ if __name__ == "__main__":
 	flats = load_flats(**vars(args.paths))
 	
 	files = find_files(**vars(args.paths))
+	
 	# maybe do check here if files have already been processed
 	if False:
-		files = exclude_processed(file, **vars(args.paths)) 
+		#files = exclude_processed(file, **vars(args.paths)) 
+		#files = [file for file in files if '_000' not in file and ('_00' in file or '_010' in file or '_011' in file or '_012' in file)]
+		pass
 
-	files = sorted(files)[1:100]
-
-	# I still cant quite get the prefetcher 100% gpu util
-	#from other.io import stream_based_prefetcher
-	#queue = stream_based_prefetcher(files)
+	# load all the files TODO: skip files already processed and no overwrite
 	queue = ImageQueue(files)
 
 	# set some things based on input images
@@ -145,10 +133,6 @@ if __name__ == "__main__":
 	# eventually make a smart psf loader method to handle the different types of psf files
 	psfs = np.load(args.paths.psf_file, allow_pickle=True)
 
-	# this mimics the behavior if there is only a single psf
-	key = (0,1500,1500)
-	psfs = { key : psfs[key] }
-	
 	# these can be very large objects in gpu ram, adjust accoringly to suit gpu specs
 	hybs_deconvolver = Deconvolver(psfs, shape, zpad = zpad, **vars(args.hybs) )
 	# shrink the zpad to limit the loaded psfs in ram since dapi isnt deconvolved as strongly
@@ -192,7 +176,7 @@ if __name__ == "__main__":
 		cp.multiply(buffer, -1, out=buffer)
 		Xh_minus = find_local_maxima(buffer, raw = chan, **vars(args.dapi) )
 		# save the data
-		#executor.submit(save_data_dapi, image.path, icol, Xh_plus, Xh_minus, **vars(args.paths))
+		executor.submit(save_data_dapi, image.path, icol, Xh_plus, Xh_minus, **vars(args.paths))
 		image.clear()
 		del chan, Xh_plus, Xh_minus, image
 
