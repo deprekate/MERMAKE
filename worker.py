@@ -23,7 +23,7 @@ import numpy as np
 from mermake.deconvolver import Deconvolver
 from mermake.maxima import find_local_maxima
 #from more.maxima import find_local_maxima
-from mermake.io import image_generator, save_data, save_data_dapi, get_files, find_files, load_flats
+from mermake.io import image_generator, load_flats
 from mermake.io import ImageQueue
 import mermake.blur as blur
 
@@ -57,12 +57,16 @@ toml_text = """
                         '/data/07_22_2024__PFF_PTBP1',
                         ]
         output_folder = '/home/katelyn/develop/MERMAKE/MERFISH_Analysis_AER'
+        redo = false
         
         #---------------------------------------------------------------------------------------#
         #---------------------------------------------------------------------------------------#
         #           you probably dont have to change any of the settings below                  #
         #---------------------------------------------------------------------------------------#
         #---------------------------------------------------------------------------------------#
+        hyb_save = '{fov}--{tag}--col{icol}.npz'
+        dapi_save = '{fov}--{tag}--dapiFeatures.npz'
+        regex = '''([A-z]+)(\d+)_([^_]+)_set(\d+)(.*)''' #use triple quotes to avoid double escape
         [hybs]
         tile_size = 300
         overlap = 89
@@ -98,13 +102,12 @@ class CustomArgumentParser(argparse.ArgumentParser):
 
 
 
-
-
 if __name__ == "__main__":
 	usage = '%s [-opt1, [-opt2, ...]] settings.toml' % __file__
 	#parser = argparse.ArgumentParser(description='', formatter_class=argparse.RawTextHelpFormatter, usage=usage)
 	parser = CustomArgumentParser(description='',formatter_class=argparse.RawTextHelpFormatter,usage=usage)
 	parser.add_argument('settings', type=is_valid_file, help='settings file')
+	parser.add_argument('-f', '--force', action="store_true", help="Overwrite output files")
 	#parser.add_argument('-c', '--check', action="store_true", help="Check a single zarr")
 	args = parser.parse_args()
 	# Convert settings to namespace and attach each top-level section to args
@@ -113,71 +116,58 @@ if __name__ == "__main__":
 	#----------------------------------------------------------------------------#
 	#----------------------------------------------------------------------------#
 	flats = load_flats(**vars(args.paths))
-	
-	files = find_files(**vars(args.paths))
-	
-	# maybe do check here if files have already been processed
-	if False:
-		#files = exclude_processed(file, **vars(args.paths)) 
-		#files = [file for file in files if '_000' not in file and ('_00' in file or '_010' in file or '_011' in file or '_012' in file)]
-		pass
-
-	# load all the files TODO: skip files already processed and no overwrite
-	queue = ImageQueue(files)
-
-	# set some things based on input images
-	shape = queue.shape
-	ncol = shape[0]
-	zpad = shape[1] - 1 # this needs to be about the same size as the input z depth
-
-	# eventually make a smart psf loader method to handle the different types of psf files
 	psfs = np.load(args.paths.psf_file, allow_pickle=True)
-
-	# these can be very large objects in gpu ram, adjust accoringly to suit gpu specs
-	hybs_deconvolver = Deconvolver(psfs, shape, zpad = zpad, **vars(args.hybs) )
-	# shrink the zpad to limit the loaded psfs in ram since dapi isnt deconvolved as strongly
-	dapi_deconvolver = Deconvolver(psfs, shape, zpad = zpad//2, **vars(args.dapi))
-
 	# the save file executor to do the saving in parallel with computations
 	executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+	
+	with ImageQueue(**vars(args.paths)) as queue:
+		# set some things based on input images
+		ncol = queue.shape[0]
+		zpad = queue.shape[1] - 1 # this needs to be about the same size as the input z depth
 
-	# this is a buffer to use for copying into 
-	buffer = cp.empty(shape[1:], dtype=cp.float32)	
+		# these can be very large objects in gpu ram, adjust accoringly to suit gpu specs
+		hybs_deconvolver = Deconvolver(psfs, queue.shape, zpad = zpad, **vars(args.hybs) )
+		# shrink the zpad to limit the loaded psfs in ram since dapi isnt deconvolved as strongly
+		dapi_deconvolver = Deconvolver(psfs, queue.shape, zpad = zpad//2, **vars(args.dapi))
 
-	overlap = args.hybs.overlap
-	tile_size = args.hybs.tile_size
+		# this is a buffer to use for copying into 
+		buffer = cp.empty(queue.shape[1:], dtype=cp.float32)	
 
-	for image in queue:
-		print(image.path, flush=True)
-		for icol in range(ncol - 1):
-			# there is probably a better way to do the Xh stacking
-			Xhf = list()
-			chan = image[icol]
-			flat = flats[icol]
-			for x,y,tile,raw in hybs_deconvolver.tile_wise(chan, flat, **vars(args.hybs)):
-				Xh = find_local_maxima(tile, raw = raw, **vars(args.hybs))
-				keep = cp.all((Xh[:,1:3] >= overlap) & (Xh[:,1:3] < tile_size + overlap), axis=-1)
-				Xh = Xh[keep]
-				Xh[:,1] += x - overlap
-				Xh[:,2] += y - overlap
-				Xhf.append(Xh)
-			executor.submit(save_data, image.path, icol, Xhf, **vars(args.paths))
-			del chan, Xhf # Xh
+		overlap = args.hybs.overlap
+		tile_size = args.hybs.tile_size
 
-		# now do dapi
-		chan = image[-1]
-		flat = flats[-1]
-		# Deconvolve in-place into the buffer
-		dapi_deconvolver.apply(chan, flat_field=flat, output=buffer, **vars(args.dapi))
-		# the dapi channel is further normalized by the stdev
-		std_val = float(cp.asnumpy(cp.linalg.norm(buffer.ravel()) / cp.sqrt(buffer.size)))
-		cp.divide(buffer, std_val, out=buffer)
-		Xh_plus = find_local_maxima(buffer, raw = chan, **vars(args.dapi) )
-		cp.multiply(buffer, -1, out=buffer)
-		Xh_minus = find_local_maxima(buffer, raw = chan, **vars(args.dapi) )
-		# save the data
-		executor.submit(save_data_dapi, image.path, icol, Xh_plus, Xh_minus, **vars(args.paths))
-		image.clear()
-		del chan, Xh_plus, Xh_minus, image
+		for image in queue:
+			print(image.path, flush=True)
+			for icol in range(ncol - 1):
+				# there is probably a better way to do the Xh stacking
+				Xhf = list()
+				chan = image[icol]
+				flat = flats[icol]
+				for x,y,tile,raw in hybs_deconvolver.tile_wise(chan, flat, **vars(args.hybs)):
+					Xh = find_local_maxima(tile, raw = raw, **vars(args.hybs))
+					keep = cp.all((Xh[:,1:3] >= overlap) & (Xh[:,1:3] < tile_size + overlap), axis=-1)
+					Xh = Xh[keep]
+					Xh[:,1] += x - overlap
+					Xh[:,2] += y - overlap
+					Xhf.append(Xh)
+				executor.submit(queue.save_hyb, image.path, icol, Xhf)
+				del chan, Xhf # Xh
+
+			# now do dapi
+			chan = image[-1]
+			flat = flats[-1]
+			# Deconvolve in-place into the buffer
+			dapi_deconvolver.apply(chan, flat_field=flat, output=buffer, **vars(args.dapi))
+			# the dapi channel is further normalized by the stdev
+			std_val = float(cp.asnumpy(cp.linalg.norm(buffer.ravel()) / cp.sqrt(buffer.size)))
+			cp.divide(buffer, std_val, out=buffer)
+			Xh_plus = find_local_maxima(buffer, raw = chan, **vars(args.dapi) )
+			cp.multiply(buffer, -1, out=buffer)
+			Xh_minus = find_local_maxima(buffer, raw = chan, **vars(args.dapi) )
+			# save the data
+			queue.save_dapi(image.path, icol, Xh_plus, Xh_minus)
+			executor.submit(queue.save_dapi, image.path, icol, Xh_plus, Xh_minus)
+			image.clear()
+			del chan, Xh_plus, Xh_minus, image
 
 
