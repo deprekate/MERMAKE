@@ -107,7 +107,6 @@ if __name__ == "__main__":
 	#parser = argparse.ArgumentParser(description='', formatter_class=argparse.RawTextHelpFormatter, usage=usage)
 	parser = CustomArgumentParser(description='',formatter_class=argparse.RawTextHelpFormatter,usage=usage)
 	parser.add_argument('settings', type=is_valid_file, help='settings file')
-	parser.add_argument('-f', '--force', action="store_true", help="Overwrite output files")
 	#parser.add_argument('-c', '--check', action="store_true", help="Check a single zarr")
 	args = parser.parse_args()
 	# Convert settings to namespace and attach each top-level section to args
