@@ -146,7 +146,6 @@ class ImageQueue:
 		# should we look for zarrs or perhaps xmls?
 		self.matches = self._find_matching_files()
 		self.matches.sort()
-		print(self.matches)
 		self.files = iter(self.matches)
 
 		# Preload the first valid image
@@ -155,7 +154,7 @@ class ImageQueue:
 		self.dtype = self._first_image.dtype
 
 		# Only redo analysis if it is true
-		if self.redo:
+		if hasattr(self, "redo") and self.redo:
 			# Filter out already processed files
 			filtered = [f for f in self.files if not self._is_done(f)]
 			# Reload first valid image from sorted list
@@ -262,14 +261,24 @@ class ImageQueue:
 		self.executor.shutdown(wait=True)
 	
 	def _find_matching_files(self):
-		"""Find all matching files across all hyb_folders"""
+		"""Find all matching files across all hyb_folders, by checking which existing folders match self.names"""
 		matches = []
-		for path in self.hyb_folders:
-			files = glob.glob(os.path.join(path,'*','*.zarr'))
-			for file in files:
-				dirname = os.path.basename(os.path.dirname(file))
-				if dirname in self.names:
-					matches.append(file)
+		for base_path in self.hyb_folders:
+			# Get all immediate subdirectories in the base path
+			try:
+				subdirs = [d for d in os.listdir(base_path) if os.path.isdir(os.path.join(base_path, d))]
+				
+				# Filter subdirectories to only those that are in self.names
+				matching_dirs = [d for d in subdirs if d in self.names]
+				
+				# For each matching directory, find the zarr files
+				for dirname in matching_dirs:
+					zarr_files = glob.glob(os.path.join(base_path, dirname, '*.zarr'))
+					matches.extend(zarr_files)
+			except (FileNotFoundError, PermissionError) as e:
+				print(f"Warning: Could not access directory {base_path}: {e}")
+				continue
+		
 		return matches
 
 	def path_parts(self, path):

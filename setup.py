@@ -49,7 +49,7 @@ def main():
 		long_description = readme(),
 		long_description_content_type="text/markdown",
 		url =  "https://github.com/deprekate/mermake",
-		scripts=['mermake.py'],
+		#scripts=['mermake.py'],
 		classifiers=[
 			"Programming Language :: Python :: 3",
 			"License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
