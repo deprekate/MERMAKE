@@ -16,7 +16,7 @@ from . import blur
 
 def load_flats(flat_field_tag, **kwargs):
 	stack = list()
-	files = glob.glob(flat_field_tag + '*')
+	files = sorted(glob.glob(flat_field_tag + '*'))
 	for file in files:
 		im = np.load(file)['im']
 		cim = cp.array(im,dtype=cp.float32)
@@ -71,7 +71,7 @@ def read_im(path, return_pos=False):
 		image = image.swapaxes(0, 1)
 
 	if image.dtype == np.uint8:
-		image = image.astype(np.float32) ** 2
+		image = image.astype(np.uint16) ** 2
 
 	if return_pos:
 		return image, x, y
@@ -138,35 +138,27 @@ class ImageQueue:
 			for j in range(start_set, end_set + 1):
 				name = f'{start_letter}{i}_{start_middle}_set{j}{start_extra}'
 				names.append(name)
-		names = set(names)
+		self.names = set(names)
 	
 		self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
 		# Iterate over the zarrs to see which match the previous names
 		# should we look for zarrs or perhaps xmls?
-		matches = list()
-		for path in self.hyb_folders:
-			files = glob.glob(os.path.join(path,'*','*.zarr'))
-			for file in files:
-				dirname = os.path.basename(os.path.dirname(file))
-				if dirname in names:
-					matches.append(file)
-		matches.sort()
-		self.files = iter(matches)
+		self.matches = self._find_matching_files()
+		self.matches.sort()
+		print(self.matches)
+		self.files = iter(self.matches)
 
 		# Preload the first valid image
 		self._first_image = self._load_first_valid_image()
 		self.shape = self._first_image.shape
 		self.dtype = self._first_image.dtype
 
-		# Only redo analysis if force is true
-		if not self.redo:
+		# Only redo analysis if it is true
+		if self.redo:
+			print('HERE')
 			# Filter out already processed files
-			filtered = [f for f in matches if not self._is_done(f)]
-
-			# Sort the remaining files
-			filtered.sort()  # or use custom key if needed, e.g. key=natural_sort_key
-
+			filtered = [f for f in self.files if not self._is_done(f)]
 			# Reload first valid image from sorted list
 			self.files = iter(filtered)
 			self._first_image = self._load_first_valid_image()
@@ -187,7 +179,6 @@ class ImageQueue:
 		if not os.path.exists(filepath):
 			return False
 		return True
-
 
 	def _prefetch_next_image(self):
 		try:
@@ -220,9 +211,35 @@ class ImageQueue:
 			if image is not None:
 				return image
 
+		# If we reach here, there are no more images in the current batch
+		if False:
+			# In watch mode, look for new files
+			import time
+			time.sleep(60)
+			
+			# Find any new files
+			new_matches = self._find_matching_files()
+			# Filter to only files we haven't processed yet
+			new_matches = [f for f in new_matches if f not in self.processed_files]
+			
+			if new_matches:
+				# New files found!
+				new_matches.sort()
+				self.matches = new_matches
+				self.files = iter(self.matches)
+				self.processed_files.update(new_matches)  # Mark as seen
+				
+				# Prefetch the first new image
+				self._prefetch_next_image()
+				
+				# Try again to get the next image
+				return self.__next__()
+			else:
+				# No new files yet, but we'll keep watching
+				return self.__next__()
+
 		self.close()
 		raise StopIteration
-
 
 	def _load_first_valid_image(self):
 		"""Try loading images one by one until one succeeds."""
@@ -234,7 +251,7 @@ class ImageQueue:
 			except Exception as e:
 				#print(f"Warning: Failed to load image {file}: {e}")
 				continue
-		raise RuntimeError("No valid images could be loaded.")
+		raise RuntimeError("No valid images could be found.")
 
 	def __enter__(self):
 		return self
@@ -244,6 +261,17 @@ class ImageQueue:
 
 	def close(self):
 		self.executor.shutdown(wait=True)
+	
+	def _find_matching_files(self):
+		"""Find all matching files across all hyb_folders"""
+		matches = []
+		for path in self.hyb_folders:
+			files = glob.glob(os.path.join(path,'*','*.zarr'))
+			for file in files:
+				dirname = os.path.basename(os.path.dirname(file))
+				if dirname in self.names:
+					matches.append(file)
+		return matches
 
 	def path_parts(self, path):
 		path_obj = Path(path)

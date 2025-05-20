@@ -116,6 +116,7 @@ if __name__ == "__main__":
 	#----------------------------------------------------------------------------#
 	flats = load_flats(**vars(args.paths))
 	psfs = np.load(args.paths.psf_file, allow_pickle=True)
+
 	# the save file executor to do the saving in parallel with computations
 	executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 	
@@ -127,8 +128,8 @@ if __name__ == "__main__":
 		# these can be very large objects in gpu ram, adjust accoringly to suit gpu specs
 		hybs_deconvolver = Deconvolver(psfs, queue.shape, zpad = zpad, **vars(args.hybs) )
 		# shrink the zpad to limit the loaded psfs in ram since dapi isnt deconvolved as strongly
+		# or you could just use a single psf, ie (0,1500,1500)
 		dapi_deconvolver = Deconvolver(psfs, queue.shape, zpad = zpad//2, **vars(args.dapi))
-
 		# this is a buffer to use for copying into 
 		buffer = cp.empty(queue.shape[1:], dtype=cp.float32)	
 
@@ -144,7 +145,8 @@ if __name__ == "__main__":
 				flat = flats[icol]
 				for x,y,tile,raw in hybs_deconvolver.tile_wise(chan, flat, **vars(args.hybs)):
 					Xh = find_local_maxima(tile, raw = raw, **vars(args.hybs))
-					keep = cp.all((Xh[:,1:3] >= overlap) & (Xh[:,1:3] < tile_size + overlap), axis=-1)
+					#keep = cp.all((Xh[:,1:3] >= overlap) & (Xh[:,1:3] < tile_size + overlap), axis=-1)
+					keep = cp.all((Xh[:,1:3] >= overlap) & (Xh[:,1:3] < cp.array([tile.shape[1] - overlap, tile.shape[2] - overlap])), axis=-1)
 					Xh = Xh[keep]
 					Xh[:,1] += x - overlap
 					Xh[:,2] += y - overlap

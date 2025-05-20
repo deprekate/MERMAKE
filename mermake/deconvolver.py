@@ -84,7 +84,7 @@ class Deconvolver:
 		if tile_size:
 			tile_shape = (tile_size + 2*overlap, tile_size + 2*overlap)
 			self.tile_pad = xp.empty((2*zpad + self.tile_height, *tile_shape), dtype=xp.float32)
-			self.tile_res = xp.empty((         self.tile_height, *tile_shape), dtype=xp.float32)
+			self.tile_res = xp.empty((		 self.tile_height, *tile_shape), dtype=xp.float32)
 			self.tile_fft = xp.empty_like(self.tile_pad, dtype=xp.complex64)
 			self.tile_buf = xp.empty_like(self.tile_res)
 
@@ -138,8 +138,15 @@ class Deconvolver:
 		# Create a CUDA stream for better synchronization
 		stream = cp.cuda.Stream(non_blocking=True)
 		with stream:
-			for x,y,tile,_ in self.tile_wise(image, flat_field = flat_field, blur_radius = blur_radius ):
-				output[:,x:x+self.tile_size,y:y+self.tile_size] = tile[:,self.overlap:-self.overlap,self.overlap:-self.overlap]
+			for x, y, tile, _ in self.tile_wise(image, flat_field=flat_field, blur_radius=blur_radius):
+				# Pre-calculate dimensions only once outside of any memory operations
+				x_end = min(x + self.tile_size, self.sx)
+				y_end = min(y + self.tile_size, self.sy)
+				width = x_end - x
+				height = y_end - y
+
+				# Use direct slicing with pre-calculated dimensions
+				output[:, x:x_end, y:y_end] = tile[:, self.overlap:self.overlap+width, self.overlap:self.overlap+height]
 		stream.synchronize()
 		return output
 

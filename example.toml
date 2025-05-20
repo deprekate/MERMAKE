@@ -1,9 +1,9 @@
 [paths]
 codebook = '/home/katelyn/develop/MERMAKE/codebooks/codebook_code_color2__ExtraAaron_8_6_blank.csv' ### 
-psf_file = '/home/katelyn/develop/MERMAKE/psfs/psf_750_Scope3_final.npy'  ### Scope5 psf
-#psf_file = '/home/katelyn/develop/MERMAKE/psfs/dic_psf_60X_cy5_Scope5.pkl'  ### Scope5 psf
+#psf_file = '/home/katelyn/develop/MERMAKE/psfs/psf_750_Scope3_final.npy'  ### Scope5 psf
+psf_file = '/home/katelyn/develop/MERMAKE/psfs/dic_psf_60X_cy5_Scope5.pkl'  ### Scope5 psf
 flat_field_tag = '/home/katelyn/develop/MERMAKE/flat_field/Scope5_'
-hyb_range = 'H1_AER_set1reshape:H1_AER_set1reshape'
+hyb_range = 'H1_AER_set1:H1_AER_set1'
 hyb_folders = [
 				'/data/07_22_2024__PFF_PTBP1',
 				]
