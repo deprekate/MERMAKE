@@ -135,6 +135,8 @@ class Deconvolver:
 		xp = cp.get_array_module(image)
 		if output is None:
 			output = xp.empty_like(image, dtype=xp.float32)
+
+		sz, sx, sy = image.shape
 		# Create a CUDA stream for better synchronization
 		stream = cp.cuda.Stream(non_blocking=True)
 		with stream:
@@ -149,33 +151,21 @@ class Deconvolver:
 				# Use direct slicing with pre-calculated dimensions
 				output[:, x:x_end, y:y_end] = tile[:, self.overlap:self.overlap+width, self.overlap:self.overlap+height]
 				'''
-				# Dimensions of the tile
-				tile_z, tile_x, tile_y = tile.shape
-
-				# Compute how much of the output we're trying to fill
-				output_x_end = min(x + self.tile_size, self.sx)
-				output_y_end = min(y + self.tile_size, self.sy)
-				output_width = output_x_end - x
-				output_height = output_y_end - y
-
-				# Compute crop bounds in the tile
-				x_crop_start = self.overlap
-				y_crop_start = self.overlap
-				x_crop_end = x_crop_start + output_width
-				y_crop_end = y_crop_start + output_height
-
-				# Make sure crop doesn't exceed tile dimensions
-				x_crop_end = min(x_crop_end, tile_x)
-				y_crop_end = min(y_crop_end, tile_y)
-				cropped_tile = tile[:, x_crop_start:x_crop_end, y_crop_start:y_crop_end]
-
-				# Also clip the output region if necessary
-				actual_width = x_crop_end - x_crop_start
-				actual_height = y_crop_end - y_crop_start
-
-				output[:, x:x+actual_width, y:y+actual_height] = cropped_tile
-
-
+				# Calculate how much of the output we can update with this tile
+				max_x = min(x + self.tile_size, sx)
+				max_y = min(y + self.tile_size, sy)
+				
+				# How much of the processed tile (after removing overlap) we can use
+				tile_usable_width = tile.shape[2] - 2*self.overlap  # Width in the tile
+				tile_usable_height = tile.shape[1] - 2*self.overlap  # Height in the tile
+				
+				# The final amount we can safely copy (limited by both output and tile)
+				width_to_copy = min(max_y - y, tile_usable_width)
+				height_to_copy = min(max_x - x, tile_usable_height)
+				
+				# Update the output with the usable part of the tile
+				output[:, x:x+height_to_copy, y:y+width_to_copy] = tile[:,self.overlap:self.overlap+height_to_copy,self.overlap:self.overlap+width_to_copy]
+								  
 		stream.synchronize()
 		return output
 
