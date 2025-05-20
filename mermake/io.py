@@ -156,7 +156,6 @@ class ImageQueue:
 
 		# Only redo analysis if it is true
 		if self.redo:
-			print('HERE')
 			# Filter out already processed files
 			filtered = [f for f in self.files if not self._is_done(f)]
 			# Reload first valid image from sorted list
