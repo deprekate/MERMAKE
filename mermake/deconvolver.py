@@ -139,6 +139,7 @@ class Deconvolver:
 		stream = cp.cuda.Stream(non_blocking=True)
 		with stream:
 			for x, y, tile, _ in self.tile_wise(image, flat_field=flat_field, blur_radius=blur_radius):
+				'''
 				# Pre-calculate dimensions only once outside of any memory operations
 				x_end = min(x + self.tile_size, self.sx)
 				y_end = min(y + self.tile_size, self.sy)
@@ -147,6 +148,34 @@ class Deconvolver:
 
 				# Use direct slicing with pre-calculated dimensions
 				output[:, x:x_end, y:y_end] = tile[:, self.overlap:self.overlap+width, self.overlap:self.overlap+height]
+				'''
+				# Dimensions of the tile
+				tile_z, tile_x, tile_y = tile.shape
+
+				# Compute how much of the output we're trying to fill
+				output_x_end = min(x + self.tile_size, self.sx)
+				output_y_end = min(y + self.tile_size, self.sy)
+				output_width = output_x_end - x
+				output_height = output_y_end - y
+
+				# Compute crop bounds in the tile
+				x_crop_start = self.overlap
+				y_crop_start = self.overlap
+				x_crop_end = x_crop_start + output_width
+				y_crop_end = y_crop_start + output_height
+
+				# Make sure crop doesn't exceed tile dimensions
+				x_crop_end = min(x_crop_end, tile_x)
+				y_crop_end = min(y_crop_end, tile_y)
+				cropped_tile = tile[:, x_crop_start:x_crop_end, y_crop_start:y_crop_end]
+
+				# Also clip the output region if necessary
+				actual_width = x_crop_end - x_crop_start
+				actual_height = y_crop_end - y_crop_start
+
+				output[:, x:x+actual_width, y:y+actual_height] = cropped_tile
+
+
 		stream.synchronize()
 		return output
 

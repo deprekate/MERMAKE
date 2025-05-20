@@ -154,7 +154,7 @@ class ImageQueue:
 		self.dtype = self._first_image.dtype
 
 		# Only redo analysis if it is true
-		if hasattr(self, "redo") and self.redo:
+		if hasattr(self, "redo") and not self.redo:
 			# Filter out already processed files
 			filtered = [f for f in self.files if not self._is_done(f)]
 			# Reload first valid image from sorted list
