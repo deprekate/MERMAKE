@@ -317,7 +317,6 @@ class ImageQueue:
 			ifov_min, ifov_max = map(int,self.fov_range.split(':'))
 		else:
 			ifov_min, ifov_max = -float('Inf') , float('Inf')
-		print(ifov_min, ifov_max)
 		for base_path in self.hyb_folders:
 			# Get all immediate subdirectories in the base path
 			try:
