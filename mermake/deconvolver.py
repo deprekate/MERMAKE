@@ -87,6 +87,7 @@ class Deconvolver:
 			self.tile_res = xp.empty((		 self.tile_height, *tile_shape), dtype=xp.float32)
 			self.tile_fft = xp.empty_like(self.tile_pad, dtype=xp.complex64)
 			self.tile_buf = xp.empty_like(self.tile_res)
+			self.tile_tem = xp.empty_like(self.tile_res)
 
 		self.overlap = overlap
 		self.zpad = zpad
@@ -99,6 +100,7 @@ class Deconvolver:
 		tile_fft = self.tile_fft
 		tile_res = self.tile_res
 		tile_buf = self.tile_buf
+		tile_tem = self.tile_tem
 	
 		# use cycle to repeat the single PSF or iterate normally if multiple PSFs exist
 		psf_ffts = cycle(self.psf_fft) if len(self.psf_fft) == 1 else iter(self.psf_fft)
@@ -127,8 +129,8 @@ class Deconvolver:
 			# optional blur subtraction
 			if blur_radius is not None:
 				blur.box_1d(tile_res, blur_radius, axis=1, output=tile_buf)
-				blur.box_1d(tile_buf, blur_radius, axis=2, output=tile_buf)
-				xp.subtract(tile_res, tile_buf, out=tile_res)
+				blur.box_1d(tile_buf, blur_radius, axis=2, output=tile_tem)
+				xp.subtract(tile_res, tile_tem, out=tile_res)
 			yield x,y,tile_res,tile
 
 	def apply(self, image, flat_field=None, blur_radius=None, output=None, **kwargs):

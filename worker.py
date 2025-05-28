@@ -107,7 +107,7 @@ if __name__ == "__main__":
 	#parser = argparse.ArgumentParser(description='', formatter_class=argparse.RawTextHelpFormatter, usage=usage)
 	parser = CustomArgumentParser(description='',formatter_class=argparse.RawTextHelpFormatter,usage=usage)
 	parser.add_argument('settings', type=is_valid_file, help='settings file')
-	#parser.add_argument('-c', '--check', action="store_true", help="Check a single zarr")
+	parser.add_argument('-c', '--check', type=str, help="Check a single zarr")
 	args = parser.parse_args()
 	# Convert settings to namespace and attach each top-level section to args
 	for key, value in vars(dict_to_namespace(args.settings)).items():
@@ -130,6 +130,11 @@ if __name__ == "__main__":
 		# shrink the zpad to limit the loaded psfs in ram since dapi isnt deconvolved as strongly
 		# or you could just use a single psf, ie (0,1500,1500)
 		dapi_deconvolver = Deconvolver(psfs, queue.shape, zpad = zpad//2, **vars(args.dapi))
+	
+		if args.check:
+			break
+
+
 		# this is a buffer to use for copying into 
 		buffer = cp.empty(queue.shape[1:], dtype=cp.float32)	
 

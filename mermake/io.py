@@ -46,14 +46,12 @@ def get_files(master_data_folders, set_ifov,iHm=None,iHM=None):
 	return all_flds,fov
 
 def read_im(path, return_pos=False):
-	#print(path)
 	dirname = os.path.dirname(path)
 	fov = os.path.basename(path).split('_')[-1].split('.')[0]
 	file_ = os.path.join(dirname, fov, 'data')
 
-	# Force eager loading from Zarr
 	z = zarr.open(file_, mode='r')
-	image = np.array(z[1:])  # use np.array(), not np.asarray()
+	image = np.array(z[1:])
 
 	shape = image.shape
 	xml_file = os.path.splitext(path)[0] + '.xml'
@@ -76,7 +74,6 @@ def read_im(path, return_pos=False):
 	if return_pos:
 		return image, x, y
 	return image
-
 
 class Container:
 	def __init__(self, data, **kwargs):
@@ -110,6 +107,57 @@ def read_cim(path):
 	container.path = path
 	return container
 
+def read_ccim(path, return_pos=False):
+	dirname = os.path.dirname(path)
+	fov = os.path.basename(path).split('_')[-1].split('.')[0]
+	file_ = os.path.join(dirname, fov, 'data')
+
+	z = zarr.open(file_, mode='r')
+	nz = z.shape[0]
+
+	# Skip z[0], start at z[1]
+	slices = []
+	for i in range(1, nz):
+		slices.append(cp.asarray(z[i]))
+
+	image = cp.stack(slices)
+	shape = image.shape
+
+	xml_file = os.path.splitext(path)[0] + '.xml'
+	if os.path.exists(xml_file):
+		txt = open(xml_file, 'r').read()
+		tag = '<z_offsets type="string">'
+		zstack = txt.split(tag)[-1].split('</')[0]
+
+		tag = '<stage_position type="custom">'
+		x, y = eval(txt.split(tag)[-1].split('</')[0])
+
+		nchannels = int(zstack.split(':')[-1])
+		nzs = (shape[0] // nchannels) * nchannels
+		image = image[:nzs].reshape((shape[0] // nchannels, nchannels, shape[-2], shape[-1]))
+		image = cp.swapaxes(image, 0, 1)
+
+	if image.dtype == cp.uint8:
+		image = image.astype(cp.uint16) ** 2
+
+	container = Container(image)
+	container.path = path
+
+	if return_pos:
+		return container, x, y
+	return container
+
+def get_ifov(filepath):
+	basename = os.path.basename(filepath)
+	matches = []
+	for m in re.finditer(r'\d+', basename):
+		start, end = m.span()
+		before = basename[start - 1] if start > 0 else ''
+		after = basename[end] if end < len(basename) else ''
+		if not before.isalpha() and not after.isalpha():
+			matches.append(m.group())
+	assert len(matches) == 1
+	return int(matches[0])
 
 class ImageQueue:
 	def __init__(self, **kwargs):
@@ -263,6 +311,13 @@ class ImageQueue:
 	def _find_matching_files(self):
 		"""Find all matching files across all hyb_folders, by checking which existing folders match self.names"""
 		matches = []
+
+		# Limit infiles to be within the range of fovs if given
+		if hasattr(self, "fov_range"):
+			ifov_min, ifov_max = map(int,self.fov_range.split(':'))
+		else:
+			ifov_min, ifov_max = -float('Inf') , float('Inf')
+		print(ifov_min, ifov_max)
 		for base_path in self.hyb_folders:
 			# Get all immediate subdirectories in the base path
 			try:
@@ -274,11 +329,13 @@ class ImageQueue:
 				# For each matching directory, find the zarr files
 				for dirname in matching_dirs:
 					zarr_files = glob.glob(os.path.join(base_path, dirname, '*.zarr'))
-					matches.extend(zarr_files)
+					for zarr_file in sorted(zarr_files):
+						ifov = get_ifov(zarr_file)
+						if ifov_min <= ifov <= ifov_max:
+							matches.append(zarr_file)
 			except (FileNotFoundError, PermissionError) as e:
 				print(f"Warning: Could not access directory {base_path}: {e}")
 				continue
-		
 		return matches
 
 	def path_parts(self, path):
@@ -299,7 +356,7 @@ class ImageQueue:
 		else:
 			xp = np
 			Xhf = np.array([])
-		if not os.path.exists(filepath) or self.redo:
+		if not os.path.exists(filepath) or (hasattr(self, "redo") and self.redo):
 			xp.savez_compressed(filepath, Xh=Xhf)
 		del Xhf
 		if xp == cp:
@@ -311,7 +368,7 @@ class ImageQueue:
 		filepath = os.path.join(self.output_folder, filename)
 	
 		xp = cp.get_array_module(Xh_plus)
-		if not os.path.exists(filepath) or self.redo:
+		if not os.path.exists(filepath) or (hasattr(self, "redo") and self.redo):
 			xp.savez_compressed(filepath, Xh_plus=Xh_plus, Xh_minus=Xh_minus)
 		del Xh_plus, Xh_minus
 		if xp == cp:

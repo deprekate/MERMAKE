@@ -80,6 +80,10 @@ def box_1d(image, size, axis=0, output=None):
 		image = image.astype(cp.float32)
 	if output is None:
 		output = cp.empty_like(image)
+
+	# Prevent in-place operations that cause race conditions
+	assert output is not image, "In-place operation not supported - input and output must be different"
+
 	delta = size // 2
 	
 	if image.ndim == 2:
