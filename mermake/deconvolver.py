@@ -281,6 +281,7 @@ def full_deconv(image, psfs, flat_field = None, tile_size=300, zpad = None, over
 	shape = image.shape
 	if zpad is None:
 		zpad = shape[0]
+	shape = (None,) + shape
 	deconvolver = Deconvolver(psfs, image_shape=shape, zpad=zpad, tile_size=tile_size, overlap=overlap, beta=beta)
 	deconv = deconvolver.apply(image, flat_field)
 
