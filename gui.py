@@ -24,7 +24,7 @@ from graphic import Graphic  # Assuming the class is saved as graphic.py
 from coords import points
 from coords import points_to_coords
 
-from mermake.io import set_data
+from stuff import set_data
 sys.path.pop(0)
 #sys.path.append('mermake')
 
