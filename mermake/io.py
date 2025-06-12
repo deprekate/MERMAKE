@@ -6,7 +6,6 @@ import glob
 
 import xml.etree.ElementTree as ET
 import zarr
-from dask import array as da
 import cupy as cp
 import numpy as np
 
