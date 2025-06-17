@@ -13,11 +13,21 @@ import concurrent.futures
 
 from . import blur
 
-def load_flats(flat_field_tag, **kwargs):
+def center_crop(A, shape):
+	"""Crop numpy array to (h, w) from center."""
+	h, w = shape[-2:]
+	H, W = A.shape
+	top = (H - h) // 2
+	left = (W - w) // 2
+	return A[top:top+h, left:left+w]
+
+def load_flats(flat_field_tag, shape=None, **kwargs):
 	stack = list()
 	files = sorted(glob.glob(flat_field_tag + '*'))
 	for file in files:
 		im = np.load(file)['im']
+		if shape is not None:
+			im = center_crop(im, shape)
 		cim = cp.array(im,dtype=cp.float32)
 		blurred = blur.box(cim, (20,20))
 		blurred = blurred / cp.median(blurred)
