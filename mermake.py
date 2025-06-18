@@ -197,7 +197,6 @@ def main():
 		overlap = args.hybs.overlap
 		tile_size = args.hybs.tile_size
 
-		from tqdm import tqdm
 		message = 'Starting image processing.'
 		print_clean(message)
 		for image in queue:
