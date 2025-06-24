@@ -200,7 +200,7 @@ def main():
 		message = 'Starting image processing.'
 		print_clean(message)
 		for image in queue:
-			#print(image.path, flush=True)
+			print(image.path, flush=True)
 			for icol in range(ncol - 1):
 				# there is probably a better way to do the Xh stacking
 				Xhf = list()

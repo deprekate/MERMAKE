@@ -2,6 +2,7 @@ import os
 import re
 import gc
 import glob
+from fnmatch import fnmatch
 
 
 import xml.etree.ElementTree as ET
@@ -172,35 +173,16 @@ class ImageQueue:
 	def __init__(self, **kwargs):
 		self.__dict__.update(kwargs)
 		os.makedirs(self.output_folder, exist_ok = True)
-		# I guess brute force the matching
-		# Regular expression to match the filename pattern
-		pattern = re.compile(self.regex, re.IGNORECASE)
-		# Split the range into start and end parts
-		start, end = self.hyb_range.split(':')
-		# Match the start and end using regex
-		match_start = pattern.match(start)
-		match_end = pattern.match(end)
-		# Extract the components from the matches
-		start_letter, start_prefix, start_middle, start_set, start_extra = match_start.groups()
-		end_letter, end_prefix, end_middle, end_set, start_extra = match_end.groups()
-		# Convert the numeric parts to integers for the range generation
-		start_num = int(start_prefix)
-		end_num = int(end_prefix)
-		start_set = int(start_set)
-		end_set = int(end_set)
 		
-		# Generate the list of acceptable names
-		names = list()
-		for i in range(start_num, end_num + 1):
-			for j in range(start_set, end_set + 1):
-				name = f'{start_letter}{i}_{start_middle}_set{j}{start_extra}'
-				names.append(name)
-		self.names = set(names)
-	
 		self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
-		# Iterate over the zarrs to see which match the previous names
-		# should we look for zarrs or perhaps xmls?
+		# Parse the range once
+		self.start_pattern, self.end_pattern = self.hyb_range.split(':')
+		self.has_wildcards = '*' in self.hyb_range
+
+		# Pre-compile regex for extracting numbers
+		self.number_regex = re.compile(r'(\d+)')
+
 		self.matches = self._find_matching_files()
 		self.matches.sort()
 		self.files = iter(self.matches)
@@ -316,34 +298,89 @@ class ImageQueue:
 
 	def close(self):
 		self.executor.shutdown(wait=True)
-	
-	def _find_matching_files(self):
-		"""Find all matching files across all hyb_folders, by checking which existing folders match self.names"""
-		matches = []
 
-		# Limit infiles to be within the range of fovs if given
-		if hasattr(self, "fov_range"):
-			ifov_min, ifov_max = map(int,self.fov_range.split(':'))
+	def _extract_numbers(self, pattern):
+		"""Extract all numbers from a pattern"""
+		return [int(x) for x in self.number_regex.findall(pattern)]
+
+	def _matches_range(self, dirname):
+		"""Check if directory name matches the range pattern"""
+		if not self.has_wildcards:
+			# Original exact matching - generate the range
+			start_nums = self._extract_numbers(self.start_pattern)
+			end_nums = self._extract_numbers(self.end_pattern)
+			file_nums = self._extract_numbers(dirname)
+			
+			if len(start_nums) != len(end_nums) or len(file_nums) != len(start_nums):
+				return False
+				
+			# Check if all numbers are within range
+			for file_num, start_num, end_num in zip(file_nums, start_nums, end_nums):
+				if not (start_num <= file_num <= end_num):
+					return False
+			
+			# Check non-numeric parts match (crude but effective)
+			start_template = self.number_regex.sub('{}', self.start_pattern)
+			file_template = self.number_regex.sub('{}', dirname)
+			return start_template == file_template
+		
 		else:
-			ifov_min, ifov_max = -float('Inf') , float('Inf')
+			# Wildcard matching - must match structure AND be in numeric range
+			# First check if it could match the wildcard structure
+			if not (fnmatch(dirname, self.start_pattern) or fnmatch(dirname, self.end_pattern)):
+				return False
+				
+			# Extract numbers from the actual patterns and filename
+			start_nums = self._extract_numbers(self.start_pattern)
+			end_nums = self._extract_numbers(self.end_pattern)  
+			file_nums = self._extract_numbers(dirname)
+			
+			# Must have same number of numeric parts
+			if len(file_nums) != len(start_nums) or len(start_nums) != len(end_nums):
+				return False
+			
+			# All numbers must be within the range
+			for file_num, start_num, end_num in zip(file_nums, start_nums, end_nums):
+				if not (start_num <= file_num <= end_num):
+					return False
+					
+			return True
+
+	def _find_matching_files(self):
+		"""Find all matching zarr files"""
+		matches = []
+		
+		# Parse FOV range if provided
+		if hasattr(self, "fov_range"):
+			ifov_min, ifov_max = map(int, self.fov_range.split(':'))
+		else:
+			ifov_min, ifov_max = -float('inf'), float('inf')
+		
 		for base_path in self.hyb_folders:
-			# Get all immediate subdirectories in the base path
 			try:
-				subdirs = [d for d in os.listdir(base_path) if os.path.isdir(os.path.join(base_path, d))]
+				base_dir = Path(base_path)
+				if not base_dir.exists():
+					continue
 				
-				# Filter subdirectories to only those that are in self.names
-				matching_dirs = [d for d in subdirs if d in self.names]
-				
-				# For each matching directory, find the zarr files
-				for dirname in matching_dirs:
-					zarr_files = glob.glob(os.path.join(base_path, dirname, '*.zarr'))
-					for zarr_file in sorted(zarr_files):
-						ifov = get_ifov(zarr_file)
-						if ifov_min <= ifov <= ifov_max:
-							matches.append(zarr_file)
-			except (FileNotFoundError, PermissionError) as e:
+				# Single pass through directory
+				for subdir in base_dir.iterdir():
+					if not subdir.is_dir():
+						continue
+						
+					if self._matches_range(subdir.name):
+						# Find zarr files in matching directory
+						for zarr_file in subdir.glob('*.zarr'):
+							try:
+								ifov = get_ifov(str(zarr_file))
+								if ifov_min <= ifov <= ifov_max:
+									matches.append(str(zarr_file))
+							except Exception:
+								continue
+								
+			except (OSError, PermissionError) as e:
 				print(f"Warning: Could not access directory {base_path}: {e}")
 				continue
+		
 		return matches
 
 	def path_parts(self, path):
