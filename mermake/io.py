@@ -55,6 +55,14 @@ def get_files(master_data_folders, set_ifov,iHm=None,iHM=None):
 	all_flds = [fld for fld in all_flds if os.path.exists(fld+os.sep+fov)]
 	return all_flds,fov
 
+def get_ifov(zarr_file_path):
+	"""Extract ifov from filename - finds last digits before .zarr"""
+	filename = Path(zarr_file_path).name  # Keep full filename with extension
+	match = re.search(r'([0-9]+)[^0-9]*\.zarr', filename)
+	if match:
+		return int(match.group(1))
+	raise ValueError(f"No digits found before .zarr in filename: {filename}")
+
 def read_im(path, return_pos=False):
 	dirname = os.path.dirname(path)
 	fov = os.path.basename(path).split('_')[-1].split('.')[0]
@@ -299,87 +307,56 @@ class ImageQueue:
 	def close(self):
 		self.executor.shutdown(wait=True)
 
-	def _extract_numbers(self, pattern):
-		"""Extract all numbers from a pattern"""
-		return [int(x) for x in self.number_regex.findall(pattern)]
+	def _extract_numbers(self, text):
+		"""Extract all numbers from text"""
+		return [int(x) for x in re.findall(r'\d+', text)]
 
 	def _matches_range(self, dirname):
-		"""Check if directory name matches the range pattern"""
-		if not self.has_wildcards:
-			# Original exact matching - generate the range
-			start_nums = self._extract_numbers(self.start_pattern)
-			end_nums = self._extract_numbers(self.end_pattern)
-			file_nums = self._extract_numbers(dirname)
-			
-			if len(start_nums) != len(end_nums) or len(file_nums) != len(start_nums):
-				return False
-				
-			# Check if all numbers are within range
-			for file_num, start_num, end_num in zip(file_nums, start_nums, end_nums):
-				if not (start_num <= file_num <= end_num):
-					return False
-			
-			# Check non-numeric parts match (crude but effective)
-			start_template = self.number_regex.sub('{}', self.start_pattern)
-			file_template = self.number_regex.sub('{}', dirname)
-			return start_template == file_template
-		
-		else:
-			# Wildcard matching - must match structure AND be in numeric range
-			# First check if it could match the wildcard structure
+		"""Check if directory matches the range pattern"""
+		# Handle wildcard patterns with fnmatch
+		if '*' in self.start_pattern or '*' in self.end_pattern:
+			# Check if it matches either pattern structure
 			if not (fnmatch(dirname, self.start_pattern) or fnmatch(dirname, self.end_pattern)):
 				return False
-				
-			# Extract numbers from the actual patterns and filename
-			start_nums = self._extract_numbers(self.start_pattern)
-			end_nums = self._extract_numbers(self.end_pattern)  
-			file_nums = self._extract_numbers(dirname)
+		
+		# Extract numbers and check ranges
+		file_nums = self._extract_numbers(dirname)
+		start_nums = self._extract_numbers(self.start_pattern)
+		end_nums = self._extract_numbers(self.end_pattern)
+		
+		if len(file_nums) != len(start_nums) or len(file_nums) != len(end_nums):
+			return False
 			
-			# Must have same number of numeric parts
-			if len(file_nums) != len(start_nums) or len(start_nums) != len(end_nums):
+		# Check each number is within range
+		for file_num, start_num, end_num in zip(file_nums, start_nums, end_nums):
+			if not (start_num <= file_num <= end_num):
 				return False
-			
-			# All numbers must be within the range
-			for file_num, start_num, end_num in zip(file_nums, start_nums, end_nums):
-				if not (start_num <= file_num <= end_num):
-					return False
-					
-			return True
+				
+		return True
 
 	def _find_matching_files(self):
 		"""Find all matching zarr files"""
 		matches = []
 		
 		# Parse FOV range if provided
+		fov_min, fov_max = (-float('inf'), float('inf'))
 		if hasattr(self, "fov_range"):
-			ifov_min, ifov_max = map(int, self.fov_range.split(':'))
-		else:
-			ifov_min, ifov_max = -float('inf'), float('inf')
+			fov_min, fov_max = map(int, self.fov_range.split(':'))
 		
 		for base_path in self.hyb_folders:
-			try:
-				base_dir = Path(base_path)
-				if not base_dir.exists():
-					continue
-				
-				# Single pass through directory
-				for subdir in base_dir.iterdir():
-					if not subdir.is_dir():
-						continue
-						
-					if self._matches_range(subdir.name):
-						# Find zarr files in matching directory
-						for zarr_file in subdir.glob('*.zarr'):
-							try:
-								ifov = get_ifov(str(zarr_file))
-								if ifov_min <= ifov <= ifov_max:
-									matches.append(str(zarr_file))
-							except Exception:
-								continue
-								
-			except (OSError, PermissionError) as e:
-				print(f"Warning: Could not access directory {base_path}: {e}")
+			base_dir = Path(base_path)
+			if not base_dir.exists():
 				continue
+				
+			for subdir in base_dir.iterdir():
+				if subdir.is_dir() and self._matches_range(subdir.name):
+					for zarr_file in subdir.glob('*.zarr'):
+						try:
+							ifov = get_ifov(str(zarr_file))
+							if fov_min <= ifov <= fov_max:
+								matches.append(str(zarr_file))
+						except:
+							continue
 		
 		return matches
 
