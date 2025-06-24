@@ -315,39 +315,49 @@ class ImageQueue:
 		"""Check if directory matches the range pattern"""
 		# Handle wildcard patterns with fnmatch
 		if '*' in self.start_pattern or '*' in self.end_pattern:
-			# Check if it matches either pattern structure
-			if not (fnmatch(dirname, self.start_pattern) or fnmatch(dirname, self.end_pattern)):
+			# Check if it matches the basic structure of either pattern
+			start_template = self.start_pattern.replace('*', '?*')  # Allow any chars where * is
+			end_template = self.end_pattern.replace('*', '?*')
+
+			if not (fnmatch(dirname, start_template) or fnmatch(dirname, end_template)):
 				return False
-		
+
 		# Extract numbers and check ranges
 		file_nums = self._extract_numbers(dirname)
 		start_nums = self._extract_numbers(self.start_pattern)
 		end_nums = self._extract_numbers(self.end_pattern)
-		
-		if len(file_nums) != len(start_nums) or len(file_nums) != len(end_nums):
-			return False
-			
-		# Check each number is within range
-		for file_num, start_num, end_num in zip(file_nums, start_nums, end_nums):
-			if not (start_num <= file_num <= end_num):
+
+		# For ranges like P0_*_set1:P4_*_set2, we need to check:
+		# First number: P0-P4 (0-4)
+		# Second number: set1-set2 (1-2)
+		if len(file_nums) >= len(start_nums) and len(file_nums) >= len(end_nums):
+			# Check the first number (P0-P4)
+			if file_nums[0] < start_nums[0] or file_nums[0] > end_nums[0]:
 				return False
-				
-		return True
+
+			# Check the last number (set1-set2)
+			if len(file_nums) > 1 and len(start_nums) > 1:
+				if file_nums[-1] < start_nums[-1] or file_nums[-1] > end_nums[-1]:
+					return False
+
+			return True
+
+		return False
 
 	def _find_matching_files(self):
 		"""Find all matching zarr files"""
 		matches = []
-		
+
 		# Parse FOV range if provided
 		fov_min, fov_max = (-float('inf'), float('inf'))
 		if hasattr(self, "fov_range"):
 			fov_min, fov_max = map(int, self.fov_range.split(':'))
-		
+
 		for base_path in self.hyb_folders:
 			base_dir = Path(base_path)
 			if not base_dir.exists():
 				continue
-				
+
 			for subdir in base_dir.iterdir():
 				if subdir.is_dir() and self._matches_range(subdir.name):
 					for zarr_file in subdir.glob('*.zarr'):
@@ -357,7 +367,7 @@ class ImageQueue:
 								matches.append(str(zarr_file))
 						except:
 							continue
-		
+
 		return matches
 
 	def path_parts(self, path):

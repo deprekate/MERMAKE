@@ -3,7 +3,7 @@ codebook = '/home/katelyn/develop/MERMAKE/codebooks/codebook_code_color2__ExtraA
 psf_file = '/home/katelyn/develop/MERMAKE/psfs/psf_750_Scope3_final.npy'  ### Scope5 psf
 #psf_file = '/home/katelyn/develop/MERMAKE/psfs/dic_psf_60X_cy5_Scope5.pkl'  ### Scope5 psf
 flat_field_tag = '/home/katelyn/develop/MERMAKE/flat_field/Scope3_'
-hyb_range = 'H1_*_set1:H1_*_set2'
+hyb_range = 'H0_*_set1:H1_*_set2'
 hyb_folders = [
 				#'/data/Tominersen_Human_05_09_2025',
 				'/data/07_22_2024__PFF_PTBP1',
