@@ -10,13 +10,13 @@ hyb_folders = [
 				#'blank'
 				]
 output_folder = '/home/katelyn/develop/MERMAKE/MERFISH_Analysis_AER'
-redo = true
+redo = false
 #---------------------------------------------------------------------------------------#
 #---------------------------------------------------------------------------------------#
 #           you probably dont have to change any of the settings below                  #
 #---------------------------------------------------------------------------------------#
 #---------------------------------------------------------------------------------------#
-fov_range = '1:3'
+fov_range = '2:3'
 hyb_save =  '{fov}--{tag}--col{icol}__Xhfits.npz'
 dapi_save = '{fov}--{tag}--dapiFeatures.npz'
 regex = '''([A-z]+)(\d+)_([^_]+)_set(\d+)(.*)''' #use triple quotes to avoid double escape

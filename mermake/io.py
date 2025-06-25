@@ -55,14 +55,6 @@ def get_files(master_data_folders, set_ifov,iHm=None,iHM=None):
 	all_flds = [fld for fld in all_flds if os.path.exists(fld+os.sep+fov)]
 	return all_flds,fov
 
-def get_ifov(zarr_file_path):
-	"""Extract ifov from filename - finds last digits before .zarr"""
-	filename = Path(zarr_file_path).name  # Keep full filename with extension
-	match = re.search(r'([0-9]+)[^0-9]*\.zarr', filename)
-	if match:
-		return int(match.group(1))
-	raise ValueError(f"No digits found before .zarr in filename: {filename}")
-
 def read_im(path, return_pos=False):
 	dirname = os.path.dirname(path)
 	fov = os.path.basename(path).split('_')[-1].split('.')[0]
@@ -165,17 +157,13 @@ def read_ccim(path, return_pos=False):
 		return container, x, y
 	return container
 
-def get_ifov(filepath):
-	basename = os.path.basename(filepath)
-	matches = []
-	for m in re.finditer(r'\d+', basename):
-		start, end = m.span()
-		before = basename[start - 1] if start > 0 else ''
-		after = basename[end] if end < len(basename) else ''
-		if not before.isalpha() and not after.isalpha():
-			matches.append(m.group())
-	assert len(matches) == 1
-	return int(matches[0])
+def get_ifov(zarr_file_path):
+	"""Extract ifov from filename - finds last digits before .zarr"""
+	filename = Path(zarr_file_path).name  # Keep full filename with extension
+	match = re.search(r'([0-9]+)[^0-9]*\.zarr', filename)
+	if match:
+		return int(match.group(1))
+	raise ValueError(f"No digits found before .zarr in filename: {filename}")
 
 class ImageQueue:
 	def __init__(self, **kwargs):
