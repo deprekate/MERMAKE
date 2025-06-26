@@ -313,12 +313,21 @@ class ImageQueue:
 		if len(file_nums) != len(start_nums) or len(file_nums) != len(end_nums):
 			return False
 
+		# Check if non-numeric parts match the pattern structure
+		# Replace numbers with placeholders to compare structure
+		dirname_template = re.sub(r'\d+', '{}', dirname)
+		start_template = re.sub(r'\d+', '{}', self.start_pattern)
+
+		if dirname_template != start_template:
+			return False
+
 		# Check each number is within range
 		for file_num, start_num, end_num in zip(file_nums, start_nums, end_nums):
 			if not (start_num <= file_num <= end_num):
 				return False
 
 		return True
+
 
 	def _find_matching_files(self):
 		"""Find all matching zarr files"""
@@ -345,6 +354,7 @@ class ImageQueue:
 							continue
 
 		return matches
+
 
 	def path_parts(self, path):
 		path_obj = Path(path)
