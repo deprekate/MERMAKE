@@ -1,6 +1,7 @@
 import subprocess
 import sys
 import warnings
+from pathlib import Path
 
 def _check_cuda():
     message = (
@@ -26,3 +27,18 @@ def _check_cuda():
 
 # Run the check at import time
 _check_cuda()
+
+def _get_version():
+    # Try to find VERSION file relative to this module
+    version_file = Path(__file__).parent / "VERSION"
+    if version_file.exists():
+        return version_file.read_text().strip()
+
+    # Fall back to looking in parent directory (for development)
+    version_file = Path(__file__).parent.parent / "VERSION"
+    if version_file.exists():
+        return version_file.read_text().strip()
+
+    return "unknown"
+
+__version__ = _get_version()

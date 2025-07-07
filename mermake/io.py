@@ -3,6 +3,8 @@ import re
 import gc
 import glob
 from fnmatch import fnmatch
+from types import SimpleNamespace
+from typing import List, Tuple, Optional
 
 
 import xml.etree.ElementTree as ET
@@ -13,6 +15,7 @@ import numpy as np
 import concurrent.futures
 
 from . import blur
+from . import __version__
 
 def center_crop(A, shape):
 	"""Crop numpy array to (h, w) from center."""
@@ -165,23 +168,119 @@ def get_ifov(zarr_file_path):
 		return int(match.group(1))
 	raise ValueError(f"No digits found before .zarr in filename: {filename}")
 
+class FolderFilter:
+	def __init__(self, hyb_range: str, regex_pattern: str):
+		self.hyb_range = hyb_range
+		self.regex = re.compile(regex_pattern)
+		self.start_pattern, self.end_pattern = self.hyb_range.split(':')
+		
+		# Parse start and end patterns
+		self.start_parts = self._parse_pattern(self.start_pattern)
+		self.end_parts = self._parse_pattern(self.end_pattern)
+		
+	def _parse_pattern(self, pattern: str) -> Optional[Tuple]:
+		"""Parse a pattern using the regex to extract components"""
+		match = self.regex.match(pattern)
+		if match:
+			return match.groups()
+		return None
+	
+	def _extract_numeric_part(self, text: str) -> int:
+		"""Extract numeric part from text like 'H1' -> 1"""
+		match = re.search(r'\d+', text)
+		return int(match.group()) if match else 0
+	
+	def _compare_patterns(self, file_parts: Tuple, start_parts: Tuple, end_parts: Tuple) -> bool:
+		"""
+		Compare if file_parts falls within the range defined by start_parts and end_parts
+		Based on your regex: ([A-z]+)(\d+)_(.+)_set(\d+)(.*)
+		Groups: (prefix, number, middle, set_number, suffix)
+		"""
+		if not all([file_parts, start_parts, end_parts]):
+			return False
+			
+		# Extract components
+		file_prefix, file_num, file_middle, file_set, file_suffix = file_parts
+		start_prefix, start_num, start_middle, start_set, start_suffix = start_parts
+		end_prefix, end_num, end_middle, end_set, end_suffix = end_parts
+		
+		# Convert to integers for comparison
+		file_num = int(file_num)
+		file_set = int(file_set)
+		start_num = int(start_num)
+		start_set = int(start_set)
+		end_num = int(end_num)
+		end_set = int(end_set)
+	
+		# Check if middle part matches (e.g., 'MER')
+		if start_middle == '*':
+			pass
+		elif file_middle != start_middle or file_middle != end_middle:
+			return False
+			
+		# Check if prefix matches
+		if file_prefix != start_prefix or file_prefix != end_prefix:
+			return False
+			
+		num_in_range = start_num <= file_num <= end_num
+		set_in_range = start_set <= file_set <= end_set
+		
+		return num_in_range and set_in_range
+	
+	def isin(self, text: str) -> bool:
+		"""Check if a single text/filename falls within the specified range"""
+		file_parts = self._parse_pattern(text)
+		if not file_parts:
+			return False
+		return self._compare_patterns(file_parts, self.start_parts, self.end_parts)
+	
+	def filter_files(self, filenames: List[str]) -> List[str]:
+		"""Filter filenames that fall within the specified range"""
+		matching_files = []
+		
+		for filename in filenames:
+			if self.isin(filename):
+				matching_files.append(filename)
+				
+		return matching_files
+
 class ImageQueue:
-	def __init__(self, **kwargs):
-		self.__dict__.update(kwargs)
+	__version__ = __version__
+	def __init__(self, args):
+		self.args = args
+		self.__dict__.update(vars(args.paths))
+
 		os.makedirs(self.output_folder, exist_ok = True)
 		
 		self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
-		# Parse the range once
-		self.start_pattern, self.end_pattern = self.hyb_range.split(':')
-		self.has_wildcards = '*' in self.hyb_range
+		folder_filter = FolderFilter(self.hyb_range, self.regex)
+		
+		fov_min, fov_max = (-float('inf'), float('inf'))
+		if hasattr(self, "fov_range"):
+			fov_min, fov_max = map(int, self.fov_range.split(':'))
+	
+		matches = list()
+		for root in self.hyb_folders:
+			if not os.path.exists(root):
+				continue
+			try:
+				with os.scandir(root) as entries:
+					for sub in entries:
+						if sub.is_dir(follow_symlinks=False) and folder_filter.isin(sub.name):
+							try:
+								with os.scandir(sub.path) as items:
+									for item in items:
+										if item.is_dir(follow_symlinks=False) and '.zarr' in item.name:
+											ifov = get_ifov(str(item.name))
+											if fov_min <= ifov <= fov_max:
+												matches.append(item.path)
+							except PermissionError:
+								continue
+			except PermissionError:
+				continue
 
-		# Pre-compile regex for extracting numbers
-		self.number_regex = re.compile(r'(\d+)')
-
-		self.matches = self._find_matching_files()
-		self.matches.sort()
-		self.files = iter(self.matches)
+		self.files = iter(sorted(matches))
 
 		# Preload the first valid image
 		self._first_image = self._load_first_valid_image()
@@ -191,7 +290,7 @@ class ImageQueue:
 		# Only redo analysis if it is true
 		if hasattr(self, "redo") and not self.redo:
 			# Filter out already processed files
-			filtered = [f for f in self.matches if not self._is_done(f)]
+			filtered = [f for f in self.files if not self._is_done(f)]
 			# Reload first valid image from sorted list
 			self.files = iter(filtered)
 			self._first_image = self._load_first_valid_image()
@@ -295,67 +394,6 @@ class ImageQueue:
 	def close(self):
 		self.executor.shutdown(wait=True)
 
-	def _extract_numbers(self, text):
-		"""Extract all numbers from text"""
-		return [int(x) for x in re.findall(r'\d+', text)]
-
-	def _matches_range(self, dirname):
-		"""Check if directory matches the range pattern"""
-		# Handle wildcard patterns - match either start or end pattern exactly
-		if '*' in self.start_pattern or '*' in self.end_pattern:
-			return fnmatch(dirname, self.start_pattern) or fnmatch(dirname, self.end_pattern)
-
-		# For non-wildcard patterns, do numeric range matching
-		file_nums = self._extract_numbers(dirname)
-		start_nums = self._extract_numbers(self.start_pattern)
-		end_nums = self._extract_numbers(self.end_pattern)
-
-		if len(file_nums) != len(start_nums) or len(file_nums) != len(end_nums):
-			return False
-
-		# Check if non-numeric parts match the pattern structure
-		# Replace numbers with placeholders to compare structure
-		dirname_template = re.sub(r'\d+', '{}', dirname)
-		start_template = re.sub(r'\d+', '{}', self.start_pattern)
-
-		if dirname_template != start_template:
-			return False
-
-		# Check each number is within range
-		for file_num, start_num, end_num in zip(file_nums, start_nums, end_nums):
-			if not (start_num <= file_num <= end_num):
-				return False
-
-		return True
-
-
-	def _find_matching_files(self):
-		"""Find all matching zarr files"""
-		matches = []
-
-		# Parse FOV range if provided
-		fov_min, fov_max = (-float('inf'), float('inf'))
-		if hasattr(self, "fov_range"):
-			fov_min, fov_max = map(int, self.fov_range.split(':'))
-
-		for base_path in self.hyb_folders:
-			base_dir = Path(base_path)
-			if not base_dir.exists():
-				continue
-
-			for subdir in base_dir.iterdir():
-				if subdir.is_dir() and self._matches_range(subdir.name):
-					for zarr_file in subdir.glob('*.zarr'):
-						try:
-							ifov = get_ifov(str(zarr_file))
-							if fov_min <= ifov <= fov_max:
-								matches.append(str(zarr_file))
-						except:
-							continue
-
-		return matches
-
-
 	def path_parts(self, path):
 		path_obj = Path(path)
 		fov = path_obj.stem  # The filename without extension
@@ -375,7 +413,7 @@ class ImageQueue:
 			xp = np
 			Xhf = np.array([])
 		if not os.path.exists(filepath) or (hasattr(self, "redo") and self.redo):
-			xp.savez_compressed(filepath, Xh=Xhf)
+			xp.savez_compressed(filepath, Xh=Xhf, version=__version__, toml=vars(self.args))
 		del Xhf
 		if xp == cp:
 			xp._default_memory_pool.free_all_blocks()  # Free standard GPU memory pool
@@ -387,7 +425,7 @@ class ImageQueue:
 	
 		xp = cp.get_array_module(Xh_plus)
 		if not os.path.exists(filepath) or (hasattr(self, "redo") and self.redo):
-			xp.savez_compressed(filepath, Xh_plus=Xh_plus, Xh_minus=Xh_minus)
+			xp.savez_compressed(filepath, Xh_plus=Xh_plus, Xh_minus=Xh_minus, version=__version__)
 		del Xh_plus, Xh_minus
 		if xp == cp:
 			xp._default_memory_pool.free_all_blocks()
@@ -414,7 +452,7 @@ def save_data_dapi(path, icol, Xh_plus, Xh_minus, output_folder, **kwargs):
 	fov, tag = path_parts(path)
 	filepath = os.path.join(output_folder, f"{fov}--{tag}--dapiFeatures.npz")
 	os.makedirs(output_folder, exist_ok=True)
-	xp.savez_compressed(filepath, Xh_plus=Xh_plus, Xh_minus=Xh_minus)
+	xp.savez_compressed(filepath, Xh_plus=Xh_plus, Xh_minus=Xh_minus, version=__version__)
 	del Xh_plus, Xh_minus
 	if xp == cp:
 		xp._default_memory_pool.free_all_blocks()  # Free standard GPU memory pool
@@ -470,3 +508,22 @@ def set_data(args):
 	#counts = Counter(re.search(pattern, file).group().split('_set')[0] for file in files if re.search(pattern, file))
 	#hybrid_count = {key: counts[key] for key in natsorted(counts)}
 
+def dict_to_namespace(d):
+	"""Recursively convert dictionary into SimpleNamespace."""
+	for key, value in d.items():
+		if isinstance(value, dict):
+			value = dict_to_namespace(value)
+		elif isinstance(value, list):
+			value = [dict_to_namespace(i) if isinstance(i, dict) else i for i in value]
+		d[key] = value
+	return SimpleNamespace(**d)
+def namespace_to_dict(obj):
+	"""Recursively convert namespace objects to dictionaries"""
+	if isinstance(obj, argparse.Namespace):
+		return {k: namespace_to_dict(v) for k, v in vars(obj).items()}
+	elif isinstance(obj, list):
+		return [namespace_to_dict(item) for item in obj]
+	elif isinstance(obj, dict):
+		return {k: namespace_to_dict(v) for k, v in obj.items()}
+	else:
+		return obj

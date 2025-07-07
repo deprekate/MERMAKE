@@ -10,7 +10,6 @@ if sys.version_info >= (3, 11):
 	import tomllib  # Python 3.11+ standard library
 else:
 	import tomli as tomllib  # Backport for older Python versions
-from types import SimpleNamespace
 import concurrent.futures
 
 # put this first to make sure to capture the correct gpu
@@ -24,18 +23,9 @@ from mermake.deconvolver import Deconvolver
 from mermake.maxima import find_local_maxima
 #from more.maxima import find_local_maxima
 from mermake.io import image_generator, load_flats
-from mermake.io import ImageQueue, read_cim
+from mermake.io import ImageQueue, read_cim, dict_to_namespace
 import mermake.blur as blur
 
-def dict_to_namespace(d):
-    """Recursively convert dictionary into SimpleNamespace."""
-    for key, value in d.items():
-        if isinstance(value, dict):
-            value = dict_to_namespace(value)
-        elif isinstance(value, list):
-            value = [dict_to_namespace(i) if isinstance(i, dict) else i for i in value]
-        d[key] = value
-    return SimpleNamespace(**d)
 
 # Validator for the TOML file
 def is_valid_file(path):
@@ -171,10 +161,12 @@ def main():
 	
 	message = 'Finding input image files.'
 	print_clean(message)
-	with ImageQueue(**vars(args.paths)) as queue:
+	with ImageQueue(args) as queue:
 		# set some things based on input images
 		ncol = queue.shape[0]
 		zpad = queue.shape[1] - 1 # this needs to be about the same size as the input z depth
+		sx = queue.shape[2]
+		sy = queue.shape[3]
 		# this is a buffer to use for copying into 
 		buffer = cp.empty(queue.shape[1:], dtype=cp.float32)	
 	
@@ -213,6 +205,9 @@ def main():
 					Xh = Xh[keep]
 					Xh[:,1] += x - overlap
 					Xh[:,2] += y - overlap
+					# one more subset to get rid of xfits in the padded area beyond the original image size
+					keep = cp.all((Xh[:,1:3] >= 0) & (Xh[:,1:3] < cp.array([sx, sy])), axis=-1)
+					Xh = Xh[keep]
 					Xhf.append(Xh)
 				executor.submit(queue.save_hyb, image.path, icol, Xhf)
 				del chan, Xhf, Xh
