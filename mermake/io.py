@@ -279,18 +279,18 @@ class ImageQueue:
 								continue
 			except PermissionError:
 				continue
-
+		
 		self.files = iter(sorted(matches))
 
 		# Preload the first valid image
 		self._first_image = self._load_first_valid_image()
 		self.shape = self._first_image.shape
 		self.dtype = self._first_image.dtype
-
+		
 		# Only redo analysis if it is true
 		if hasattr(self, "redo") and not self.redo:
 			# Filter out already processed files
-			filtered = [f for f in self.files if not self._is_done(f)]
+			filtered = [f for f in sorted(matches) if not self._is_done(f)]
 			# Reload first valid image from sorted list
 			self.files = iter(filtered)
 			self._first_image = self._load_first_valid_image()
@@ -299,18 +299,17 @@ class ImageQueue:
 		self.future = None
 		self._prefetch_next_image()
 
-	def _is_done(self, path):
-		fov, tag = self.path_parts(path)
-		for icol in range(self.shape[0] - 1):
-			filename = self.hyb_save.format(fov=fov, tag=tag, icol=icol)
-			filepath = os.path.join(self.output_folder, filename)
-			if not os.path.exists(filepath):
-				return False
-		filename = self.dapi_save.format(fov=fov, tag=tag, icol=icol)
-		filepath = os.path.join(self.output_folder, filename)
-		if not os.path.exists(filepath):
-			return False
-		return True
+	def _load_first_valid_image(self):
+		"""Try loading images one by one until one succeeds."""
+		for file in self.files:
+			try:
+				future = self.executor.submit(read_cim, file)
+				image = future.result()
+				return image
+			except Exception as e:
+				#print(f"Warning: Failed to load image {file}: {e}")
+				continue
+		raise RuntimeError("No valid images could be found.")
 
 	def _prefetch_next_image(self):
 		try:
@@ -373,23 +372,25 @@ class ImageQueue:
 		self.close()
 		raise StopIteration
 
-	def _load_first_valid_image(self):
-		"""Try loading images one by one until one succeeds."""
-		for file in self.files:
-			try:
-				future = self.executor.submit(read_cim, file)
-				image = future.result()
-				return image
-			except Exception as e:
-				#print(f"Warning: Failed to load image {file}: {e}")
-				continue
-		raise RuntimeError("No valid images could be found.")
-
 	def __enter__(self):
 		return self
 
 	def __exit__(self, exc_type, exc_val, exc_tb):
 		self.close()
+
+	def _is_done(self, path):
+		fov, tag = self.path_parts(path)
+		for icol in range(self.shape[0] - 1):
+			filename = self.hyb_save.format(fov=fov, tag=tag, icol=icol)
+			filepath = os.path.join(self.output_folder, filename)
+			if not os.path.exists(filepath):
+				return False
+		filename = self.dapi_save.format(fov=fov, tag=tag, icol=icol)
+		filepath = os.path.join(self.output_folder, filename)
+		if not os.path.exists(filepath):
+			return False
+		return True
+
 
 	def close(self):
 		self.executor.shutdown(wait=True)
