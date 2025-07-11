@@ -10,7 +10,7 @@ hyb_folders = [
 				#'blank'
 				]
 output_folder = '/home/katelyn/develop/MERMAKE/MERFISH_Analysis_AER'
-redo = false
+redo = true
 #---------------------------------------------------------------------------------------#
 #---------------------------------------------------------------------------------------#
 #           you probably dont have to change any of the settings below                  #

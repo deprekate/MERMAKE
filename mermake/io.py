@@ -402,7 +402,7 @@ class ImageQueue:
 		tag = path_obj.parent.name  # The parent directory name (which you seem to want)
 		return fov, tag
 
-	def save_hyb(self, path, icol, Xhf):
+	def save_hyb(self, path, icol, Xhf, attempt=1, max_attempts=3):
 		fov,tag = self.path_parts(path)
 		filename = self.hyb_save.format(fov=fov, tag=tag, icol=icol)
 		filepath = os.path.join(self.output_folder, filename)
@@ -417,11 +417,21 @@ class ImageQueue:
 		if not os.path.exists(filepath) or (hasattr(self, "redo") and self.redo):
 			args = namespace_to_array(self.args.settings)
 			xp.savez_compressed(filepath, Xh=Xhf, version=__version__, args=args)
+			#  Optional integrity check after saving
+			try:
+				with np.load(filepath) as dat:
+					_ = dat["Xh"].shape  # Try accessing a key
+			except Exception as e:
+				os.remove(filepath)
+				if attempt < max_attempts:
+					return self.save_hyb(path, icol, Xhf, attempt=attempt+1, max_attempts=max_attempts)
+				else:
+					raise RuntimeError(f"Failed saving xfit file after {max_attempts} attempts: {filepath}")
 		del Xhf
 		if xp == cp:
 			xp._default_memory_pool.free_all_blocks()  # Free standard GPU memory pool
 
-	def save_dapi(self, path, icol, Xh_plus, Xh_minus):
+	def save_dapi(self, path, icol, Xh_plus, Xh_minus, attempt=1, max_attempts=3):
 		fov, tag = self.path_parts(path)
 		filename = self.dapi_save.format(fov=fov, tag=tag, icol=icol)
 		filepath = os.path.join(self.output_folder, filename)
@@ -430,6 +440,16 @@ class ImageQueue:
 		if not os.path.exists(filepath) or (hasattr(self, "redo") and self.redo):
 			args = namespace_to_array(self.args.settings)
 			xp.savez_compressed(filepath, Xh_plus=Xh_plus, Xh_minus=Xh_minus, version=__version__, args=args)
+			#  Optional integrity check after saving
+			try:
+				with np.load(filepath) as dat:
+					_ = dat["Xh_minus"].shape  # Try accessing a key
+			except Exception as e:
+				os.remove(filepath)
+				if attempt < max_attempts:
+					return self.save_dapi(path, icol, Xh_plus, Xh_minus, attempt=attempt+1, max_attempts=max_attempts)
+				else:
+					raise RuntimeError(f"Failed saving xfit file after {max_attempts} attempts: {filepath}")
 		del Xh_plus, Xh_minus
 		if xp == cp:
 			xp._default_memory_pool.free_all_blocks()
