@@ -5,7 +5,9 @@ import glob
 from fnmatch import fnmatch
 from types import SimpleNamespace
 from typing import List, Tuple, Optional
-
+import json
+import argparse
+from argparse import Namespace
 
 import xml.etree.ElementTree as ET
 import zarr
@@ -193,7 +195,6 @@ class FolderFilter:
 	def _compare_patterns(self, file_parts: Tuple, start_parts: Tuple, end_parts: Tuple) -> bool:
 		"""
 		Compare if file_parts falls within the range defined by start_parts and end_parts
-		Based on your regex: ([A-z]+)(\d+)_(.+)_set(\d+)(.*)
 		Groups: (prefix, number, middle, set_number, suffix)
 		"""
 		if not all([file_parts, start_parts, end_parts]):
@@ -414,7 +415,8 @@ class ImageQueue:
 			xp = np
 			Xhf = np.array([])
 		if not os.path.exists(filepath) or (hasattr(self, "redo") and self.redo):
-			xp.savez_compressed(filepath, Xh=Xhf, version=__version__, toml=vars(self.args))
+			args = namespace_to_array(self.args.settings)
+			xp.savez_compressed(filepath, Xh=Xhf, version=__version__, args=args)
 		del Xhf
 		if xp == cp:
 			xp._default_memory_pool.free_all_blocks()  # Free standard GPU memory pool
@@ -426,7 +428,8 @@ class ImageQueue:
 	
 		xp = cp.get_array_module(Xh_plus)
 		if not os.path.exists(filepath) or (hasattr(self, "redo") and self.redo):
-			xp.savez_compressed(filepath, Xh_plus=Xh_plus, Xh_minus=Xh_minus, version=__version__)
+			args = namespace_to_array(self.args.settings)
+			xp.savez_compressed(filepath, Xh_plus=Xh_plus, Xh_minus=Xh_minus, version=__version__, args=args)
 		del Xh_plus, Xh_minus
 		if xp == cp:
 			xp._default_memory_pool.free_all_blocks()
@@ -447,16 +450,6 @@ def image_generator(hybs, fovs):
 		if future:
 			yield future.result()
 
-
-def save_data_dapi(path, icol, Xh_plus, Xh_minus, output_folder, **kwargs):
-	xp = cp.get_array_module(Xh_plus)
-	fov, tag = path_parts(path)
-	filepath = os.path.join(output_folder, f"{fov}--{tag}--dapiFeatures.npz")
-	os.makedirs(output_folder, exist_ok=True)
-	xp.savez_compressed(filepath, Xh_plus=Xh_plus, Xh_minus=Xh_minus, version=__version__)
-	del Xh_plus, Xh_minus
-	if xp == cp:
-		xp._default_memory_pool.free_all_blocks()  # Free standard GPU memory pool
 
 from .utils import *
 def read_xml(path):
@@ -528,3 +521,23 @@ def namespace_to_dict(obj):
 		return {k: namespace_to_dict(v) for k, v in obj.items()}
 	else:
 		return obj
+
+def namespace_to_array(obj, prefix=''):
+	"""
+	Recursively convert Namespace or dict to list of (block, key, value) tuples.
+	prefix is the accumulated parent keys joined by dots.
+	"""
+	rows = []
+	if isinstance(obj, (Namespace, SimpleNamespace)):
+		obj = vars(obj)
+	if isinstance(obj, dict):
+		for k, v in obj.items():
+			full_key = f"{prefix}.{k}" if prefix else k
+			if isinstance(v, (Namespace, SimpleNamespace, dict)):
+				rows.extend(namespace_to_array(v, prefix=full_key))
+			else:
+				rows.append((prefix, k, str(v)))
+	else:
+		# For other types just append
+		rows.append((prefix, '', str(obj)))
+	return rows

@@ -209,6 +209,7 @@ def main():
 					keep = cp.all((Xh[:,1:3] >= 0) & (Xh[:,1:3] < cp.array([sx, sy])), axis=-1)
 					Xh = Xh[keep]
 					Xhf.append(Xh)
+				queue.save_hyb( image.path, icol, Xhf)
 				executor.submit(queue.save_hyb, image.path, icol, Xhf)
 				del chan, Xhf, Xh
 
