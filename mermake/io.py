@@ -417,7 +417,6 @@ class ImageQueue:
 			xp = np
 			Xhf = np.array([])
 		if not os.path.exists(filepath) or (hasattr(self, "redo") and self.redo):
-			args = namespace_to_array(self.args.settings)
 			xp.savez_compressed(filepath, Xh=Xhf, version=__version__, args=self.args_array)
 			#  Optional integrity check after saving
 			# this seems to greatly slow everything down
@@ -441,7 +440,6 @@ class ImageQueue:
 	
 		xp = cp.get_array_module(Xh_plus)
 		if not os.path.exists(filepath) or (hasattr(self, "redo") and self.redo):
-			args = namespace_to_array(self.args.settings)
 			xp.savez_compressed(filepath, Xh_plus=Xh_plus, Xh_minus=Xh_minus, version=__version__, args=self.args_array)
 			#  Optional integrity check after saving
 			# this seems to greatly slow everything down
