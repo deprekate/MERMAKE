@@ -189,7 +189,7 @@ def main():
 		overlap = args.hybs.overlap
 		tile_size = args.hybs.tile_size
 
-		message = 'Starting image processing.'
+		message = 'Starting image processing.\n'
 		print_clean(message)
 		for image in queue:
 			print(image.path, flush=True)

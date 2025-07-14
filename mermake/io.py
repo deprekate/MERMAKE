@@ -249,6 +249,8 @@ class ImageQueue:
 	__version__ = __version__
 	def __init__(self, args):
 		self.args = args
+
+		self.args_array = namespace_to_array(self.args.settings)
 		self.__dict__.update(vars(args.paths))
 
 		os.makedirs(self.output_folder, exist_ok = True)
@@ -416,17 +418,18 @@ class ImageQueue:
 			Xhf = np.array([])
 		if not os.path.exists(filepath) or (hasattr(self, "redo") and self.redo):
 			args = namespace_to_array(self.args.settings)
-			xp.savez_compressed(filepath, Xh=Xhf, version=__version__, args=args)
+			xp.savez_compressed(filepath, Xh=Xhf, version=__version__, args=self.args_array)
 			#  Optional integrity check after saving
-			try:
-				with np.load(filepath) as dat:
-					_ = dat["Xh"].shape  # Try accessing a key
-			except Exception as e:
-				os.remove(filepath)
-				if attempt < max_attempts:
-					return self.save_hyb(path, icol, Xhf, attempt=attempt+1, max_attempts=max_attempts)
-				else:
-					raise RuntimeError(f"Failed saving xfit file after {max_attempts} attempts: {filepath}")
+			# this seems to greatly slow everything down
+			#try:
+			#	with np.load(filepath) as dat:
+			#		_ = dat["Xh"].shape  # Try accessing a key
+			#except Exception as e:
+			#	os.remove(filepath)
+			#	if attempt < max_attempts:
+			#		return self.save_hyb(path, icol, Xhf, attempt=attempt+1, max_attempts=max_attempts)
+			#	else:
+			#		raise RuntimeError(f"Failed saving xfit file after {max_attempts} attempts: {filepath}")
 		del Xhf
 		if xp == cp:
 			xp._default_memory_pool.free_all_blocks()  # Free standard GPU memory pool
@@ -439,17 +442,18 @@ class ImageQueue:
 		xp = cp.get_array_module(Xh_plus)
 		if not os.path.exists(filepath) or (hasattr(self, "redo") and self.redo):
 			args = namespace_to_array(self.args.settings)
-			xp.savez_compressed(filepath, Xh_plus=Xh_plus, Xh_minus=Xh_minus, version=__version__, args=args)
+			xp.savez_compressed(filepath, Xh_plus=Xh_plus, Xh_minus=Xh_minus, version=__version__, args=self.args_array)
 			#  Optional integrity check after saving
-			try:
-				with np.load(filepath) as dat:
-					_ = dat["Xh_minus"].shape  # Try accessing a key
-			except Exception as e:
-				os.remove(filepath)
-				if attempt < max_attempts:
-					return self.save_dapi(path, icol, Xh_plus, Xh_minus, attempt=attempt+1, max_attempts=max_attempts)
-				else:
-					raise RuntimeError(f"Failed saving xfit file after {max_attempts} attempts: {filepath}")
+			# this seems to greatly slow everything down
+			#try:
+			#	with np.load(filepath) as dat:
+			#		_ = dat["Xh_minus"].shape  # Try accessing a key
+			#except Exception as e:
+			#	os.remove(filepath)
+			#	if attempt < max_attempts:
+			#		return self.save_dapi(path, icol, Xh_plus, Xh_minus, attempt=attempt+1, max_attempts=max_attempts)
+			#	else:
+			#		raise RuntimeError(f"Failed saving xfit file after {max_attempts} attempts: {filepath}")
 		del Xh_plus, Xh_minus
 		if xp == cp:
 			xp._default_memory_pool.free_all_blocks()
