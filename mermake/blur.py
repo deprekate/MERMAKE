@@ -168,6 +168,7 @@ def box_1d(image, size, axis=0, output=None):
 		# For 2D arrays, assume XY format
 		size_x, size_y = image.shape
 		size_z = 1  # Dummy dimension
+		axis += 1
 	elif image.ndim == 3:
 		# For 3D arrays, use ZXY format
 		size_z, size_x, size_y = image.shape
