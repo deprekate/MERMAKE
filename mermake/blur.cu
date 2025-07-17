@@ -45,7 +45,7 @@ void box_1d(const float* input, float* output,
 
 	// Avoid division by zero and handle potential NaN values
 	if (num > 0) {
-		output[idx] = sum / num;
+		output[idx] = sum / (2 * delta + 1);
 	} else {
 		output[idx] = 0.0f;  // Default value if no elements were added
 	}

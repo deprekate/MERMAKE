@@ -96,12 +96,13 @@ def box(image, size, axes=None, output=None, temp=None):
 		box_1d(image, sizes[axis], axis=axis, output=output)
 		return output
 
-	# For multiple axes, we can't avoid at least one temporary buffer
-	# because we can't do in-place blurring (causes race conditions)
-	# But we'll minimize to just one temp buffer that gets reused
-
 	# For multiple axes, we need exactly one temporary buffer
 	# (can't avoid this due to CUDA kernel race condition constraints)
+	
+	# WE CAN DO WITHOUT THE EXTRA TEMP BUFFER IF WE DO A TRUE MULTIDIMENSIONAL
+	# NESTED FOR LOOPS IN THE CUDA KERNEL INSTEAD OF MULTIPLE LINEAR SEPARABLE 1D
+	# THE TRADEOFF IS SPEED VERSUS RAM
+
 
 	if temp is None:
 		temp = cp.empty_like(image)
@@ -162,12 +163,16 @@ def box_1d(image, size, axis=0, output=None):
 	# Prevent in-place operations that cause race conditions
 	assert output is not image, "In-place operation not supported - input and output must be different"
 
+	if axis < 0:
+		axis = image.ndim - 1
+
 	delta = size // 2
 	
 	if image.ndim == 2:
 		# For 2D arrays, assume XY format
 		size_x, size_y = image.shape
 		size_z = 1  # Dummy dimension
+		assert axis < 2, f"axis {axis} is out of bounds for array of dimension 2"
 		axis += 1
 	elif image.ndim == 3:
 		# For 3D arrays, use ZXY format
