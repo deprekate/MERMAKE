@@ -8,6 +8,7 @@ from typing import List, Tuple, Optional
 import json
 import argparse
 from argparse import Namespace
+import functools
 
 import xml.etree.ElementTree as ET
 import zarr
@@ -60,6 +61,43 @@ def get_files(master_data_folders, set_ifov,iHm=None,iHM=None):
 	all_flds = [fld for fld in all_flds if os.path.exists(fld+os.sep+fov)]
 	return all_flds,fov
 
+class Container:
+	def __init__(self, data, **kwargs):
+		# Store the data and any additional metadata
+		self.data = data
+		self.metadata = kwargs
+	def __getitem__(self, item):
+		# Allow indexing into the container
+		return self.data[item]
+	def __array__(self):
+		# Return the underlying array
+		return self.data
+	def __repr__(self):
+		return f"Container(shape={self.data.shape}, dtype={self.data.dtype}, metadata={self.metadata})"
+	def __getattr__(self, name):
+		if name in self.metadata:
+			return self.metadata[name]
+		if hasattr(self.data, name):
+			return getattr(self.data, name)
+		raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+
+def containerize(func):
+	@functools.wraps(func)
+	def wrapper(*args, **kwargs):
+		result = func(*args, **kwargs)
+		metadata = dict(kwargs)
+		if args:
+			metadata['path'] = args[0]
+		if isinstance(result, tuple):
+			arr, *rest = result
+			if len(rest) == 2:
+				metadata['x'], metadata['y'] = rest
+			return Container(arr, **metadata)
+		else:
+			return Container(result, **metadata)
+	return wrapper
+
+@containerize
 def read_im(path, return_pos=False):
 	dirname = os.path.dirname(path)
 	fov = os.path.basename(path).split('_')[-1].split('.')[0]
@@ -67,6 +105,8 @@ def read_im(path, return_pos=False):
 
 	z = zarr.open(file_, mode='r')
 	image = np.array(z[1:])
+	#from dask import array as da
+	#image = da.from_zarr(file_)[1:]
 
 	shape = image.shape
 	xml_file = os.path.splitext(path)[0] + '.xml'
@@ -89,31 +129,6 @@ def read_im(path, return_pos=False):
 	if return_pos:
 		return image, x, y
 	return image
-
-class Container:
-	def __init__(self, data, **kwargs):
-		# Store the array and any additional metadata
-		self.data = data
-		self.metadata = kwargs
-	def __getitem__(self, item):
-		# Allow indexing into the container
-		return self.data[item]
-	def __array__(self):
-		# Return the underlying array
-		return self.data
-	def __repr__(self):
-		# Custom string representation showing the metadata or basic info
-		return f"Container(shape={self.data.shape}, dtype={self.data.dtype}, metadata={self.metadata})"
-	def __getattr__(self, name):
-		# If attribute is not found on the container, delegate to the CuPy object
-		if hasattr(self.data, name):
-			return getattr(self.data, name)
-		raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
-	def clear(self):
-		# Explicitly delete the CuPy array and synchronize
-		if hasattr(self, 'data') and self.data is not None:
-			del self.data
-			self.data = None
 
 def read_cim(path):
 	im = read_im(path)
@@ -255,7 +270,7 @@ class ImageQueue:
 
 		os.makedirs(self.output_folder, exist_ok = True)
 		
-		self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+		self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
 
 		folder_filter = FolderFilter(self.hyb_range, self.regex)
 		
@@ -263,7 +278,7 @@ class ImageQueue:
 		if hasattr(self, "fov_range"):
 			fov_min, fov_max = map(int, self.fov_range.split(':'))
 	
-		matches = list()
+		matches = dict()
 		for root in self.hyb_folders:
 			if not os.path.exists(root):
 				continue
@@ -277,12 +292,14 @@ class ImageQueue:
 										if item.is_dir(follow_symlinks=False) and '.zarr' in item.name:
 											ifov = get_ifov(str(item.name))
 											if fov_min <= ifov <= fov_max:
-												matches.append(item.path)
+												matches.setdefault(ifov, []).append(item.path)
+
 							except PermissionError:
 								continue
 			except PermissionError:
 				continue
-		
+		matches = [item for sublist in matches.values() for item in sublist]
+	
 		self.files = iter(sorted(matches))
 
 		# Preload the first valid image
@@ -306,7 +323,7 @@ class ImageQueue:
 		"""Try loading images one by one until one succeeds."""
 		for file in self.files:
 			try:
-				future = self.executor.submit(read_cim, file)
+				future = self.executor.submit(read_im, file)
 				image = future.result()
 				return image
 			except Exception as e:
@@ -317,7 +334,7 @@ class ImageQueue:
 	def _prefetch_next_image(self):
 		try:
 			next_file = next(self.files)
-			self.future = self.executor.submit(read_cim, next_file)
+			self.future = self.executor.submit(read_im, next_file)
 		except StopIteration:
 			self.future = None
 
@@ -338,7 +355,7 @@ class ImageQueue:
 			# Try to prefetch the next image regardless
 			try:
 				next_file = next(self.files)
-				self.future = self.executor.submit(read_cim, next_file)
+				self.future = self.executor.submit(read_im, next_file)
 			except StopIteration:
 				self.future = None
 			# If we got a valid image, return it

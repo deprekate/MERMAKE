@@ -189,33 +189,52 @@ def main():
 		overlap = args.hybs.overlap
 		tile_size = args.hybs.tile_size
 
+		transfer_stream = cp.cuda.Stream(non_blocking=True)
+		compute_stream = cp.cuda.Stream(non_blocking=True)
 		message = 'Starting image processing.\n'
 		print_clean(message)
 		for image in queue:
 			print(image.path, flush=True)
+			gpu_channels = []
+			transfer_events = []
+			for icol in range(ncol):
+				with transfer_stream:
+					chan_gpu = cp.asarray(image[icol])
+					event = cp.cuda.Event()
+					event.record(transfer_stream)
+					gpu_channels.append(chan_gpu)
+					transfer_events.append(event)
 			for icol in range(ncol - 1):
-				# there is probably a better way to do the Xh stacking
-				Xhf = list()
-				chan = image[icol]
-				flat = flats[icol]
-				for x,y,tile,raw in deconvolver.hybs.tile_wise(chan, flat, **vars(args.hybs)):
-					Xh = find_local_maxima(tile, raw = raw, **vars(args.hybs))
-					#keep = cp.all((Xh[:,1:3] >= overlap) & (Xh[:,1:3] < tile_size + overlap), axis=-1)
-					keep = cp.all((Xh[:,1:3] >= overlap) & (Xh[:,1:3] < cp.array([tile.shape[1] - overlap, tile.shape[2] - overlap])), axis=-1)
-					Xh = Xh[keep]
-					Xh[:,1] += x - overlap
-					Xh[:,2] += y - overlap
-					# one more subset to get rid of xfits in the padded area beyond the original image size
-					keep = cp.all((Xh[:,1:3] >= 0) & (Xh[:,1:3] < cp.array([sx, sy])), axis=-1)
-					Xh = Xh[keep]
-					Xhf.append(Xh)
-				queue.save_hyb( image.path, icol, Xhf)
-				executor.submit(queue.save_hyb, image.path, icol, Xhf)
-				del chan, Xhf, Xh
+				chan = gpu_channels[icol]
+				event = transfer_events[icol]
 
+				# Wait for channel transfer before compute
+				compute_stream.wait_event(event)
+				with compute_stream:
+					# there is probably a better way to do the Xh stacking
+					Xhf = []
+					flat = flats[icol]
+					for x,y,tile,raw in deconvolver.hybs.tile_wise(chan, flat, **vars(args.hybs)):
+						Xh = find_local_maxima(tile, raw = raw, **vars(args.hybs))
+						keep = cp.all((Xh[:,1:3] >= overlap) & (Xh[:,1:3] < cp.array([tile.shape[1] - overlap, tile.shape[2] - overlap])), axis=-1)
+						Xh = Xh[keep]
+						Xh[:,1] += x - overlap
+						Xh[:,2] += y - overlap
+						# one more subset to get rid of xfits in the padded area beyond the original image size
+						keep = cp.all((Xh[:,1:3] >= 0) & (Xh[:,1:3] < cp.array([sx, sy])), axis=-1)
+						Xh = Xh[keep]
+						Xhf.append(Xh)
+					queue.save_hyb( image.path, icol, Xhf)
+					executor.submit(queue.save_hyb, image.path, icol, Xhf)
+					del chan, Xhf, Xh, keep
+
+			# Wait for channel transfer before compute
+			chan = gpu_channels[icol]
+			event = transfer_events[icol]
+			compute_stream.wait_event(event)
 
 			# now do dapi
-			chan = image[-1]
+			#chan = cp.asarray(image[-1])
 			flat = flats[-1]
 			# Deconvolve in-place into the buffer
 			deconvolver.dapi.apply(chan, flat_field=flat, output=buffer, **vars(args.dapi))
@@ -228,8 +247,8 @@ def main():
 			# save the data
 			queue.save_dapi(image.path, icol, Xh_plus, Xh_minus)
 			executor.submit(queue.save_dapi, image.path, icol, Xh_plus, Xh_minus)
-			image.clear()
-			del chan, Xh_plus, Xh_minus, image
+			#image.clear()
+			del chan, Xh_plus, Xh_minus, image, gpu_channels, chan_gpu, transfer_events
 
 if __name__ == "__main__":
 	main()
