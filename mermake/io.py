@@ -9,13 +9,14 @@ import json
 import argparse
 from argparse import Namespace
 import functools
+import concurrent.futures
+import queue
+import threading
 
 import xml.etree.ElementTree as ET
 import zarr
 import cupy as cp
 import numpy as np
-
-import concurrent.futures
 
 from . import blur
 from . import __version__
@@ -262,16 +263,13 @@ class FolderFilter:
 
 class ImageQueue:
 	__version__ = __version__
-	def __init__(self, args):
+	def __init__(self, args, prefetch_count=4):
 		self.args = args
-
 		self.args_array = namespace_to_array(self.args.settings)
 		self.__dict__.update(vars(args.paths))
 
 		os.makedirs(self.output_folder, exist_ok = True)
 		
-		self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
-
 		folder_filter = FolderFilter(self.hyb_range, self.regex)
 		
 		fov_min, fov_max = (-float('inf'), float('inf'))
@@ -299,68 +297,81 @@ class ImageQueue:
 			except PermissionError:
 				continue
 		matches = [item for sublist in matches.values() for item in sublist]
-	
-		self.files = iter(sorted(matches))
 
-		# Preload the first valid image
-		self._first_image = self._load_first_valid_image()
-		self.shape = self._first_image.shape
-		self.dtype = self._first_image.dtype
-		
-		# Only redo analysis if it is true
-		if hasattr(self, "redo") and not self.redo:
-			# Filter out already processed files
-			filtered = [f for f in sorted(matches) if not self._is_done(f)]
-			# Reload first valid image from sorted list
-			self.files = iter(filtered)
-			self._first_image = self._load_first_valid_image()
-
-		# Start prefetching the next image
-		self.future = None
-		self._prefetch_next_image()
-
-	def _load_first_valid_image(self):
-		"""Try loading images one by one until one succeeds."""
-		for file in self.files:
+		# Peek at first image to set shape/dtype
+		for f in matches:
 			try:
-				future = self.executor.submit(read_im, file)
-				image = future.result()
-				return image
-			except Exception as e:
-				#print(f"Warning: Failed to load image {file}: {e}")
+				first_image = read_im(f)
+				break
+			except:
 				continue
-		raise RuntimeError("No valid images could be found.")
+		if first_image is None:
+			raise RuntimeError("No valid images found.")
+		self.shape = first_image.shape
+		self.dtype = first_image.dtype
+		
+		# Filter out already processed files
+		if hasattr(self, "redo") and not self.redo:
+			#matches = [f for f in sorted(matches) if not self._is_done(f)]
+			matches = [f for f in matches if not self._is_done(f)]
 
-	def _prefetch_next_image(self):
-		try:
-			next_file = next(self.files)
-			self.future = self.executor.submit(read_im, next_file)
-		except StopIteration:
-			self.future = None
+		#self.files = iter(sorted(matches))
+		self.files = iter(matches)
+
+		# Start worker thread(s)
+		self.queue = queue.Queue(maxsize=prefetch_count)
+		self.stop_event = threading.Event()
+		self.thread = threading.Thread(target=self._worker, daemon=True)
+		self.thread.start()
+		self.block = []
+
+	def _worker(self):
+		"""Continuously read images and put them in the queue."""
+		for fpath in self.files:
+			if self.stop_event.is_set():
+				break
+			try:
+				img = read_im(fpath)
+				self.queue.put(img)  # Blocks if queue is full
+			except Exception as e:
+				# print(f"Warning: failed to read {fpath}: {e}")
+				continue
+		# Signal no more images
+		self.queue.put(None)
 
 	def __iter__(self):
 		return self
 
 	def __next__(self):
-		if self._first_image is not None:
-			image = self._first_image
-			self._first_image = None
-			return image
-		while self.future is not None:
-			try:
-				image = self.future.result()
-			except Exception as e:
-				#print(f"Warning: Failed to load image: {e}")
-				image = None
-			# Try to prefetch the next image regardless
-			try:
-				next_file = next(self.files)
-				self.future = self.executor.submit(read_im, next_file)
-			except StopIteration:
-				self.future = None
-			# If we got a valid image, return it
-			if image is not None:
-				return image
+		"""Return the next block of images (same FOV)."""
+		block = self.block
+		first_item = self.queue.get()
+		if first_item is None:
+			raise StopIteration
+		
+		self.block.append(first_item)
+		first_fov = get_ifov(first_item.path)  # assuming image has .path attr
+
+		# Keep consuming queue until FOV changes or None
+		while True:
+			item = self.queue.get()
+			if item is None:
+				self.queue.put(None)
+				break
+			if get_ifov(item.path) != first_fov:
+				self.block = [item]
+				break
+			block.append(item)
+
+		return block
+	'''
+	def __next__(self):
+		img = self.queue.get()
+		if img is None:
+			raise StopIteration
+		return img
+	'''
+	'''
 
 		# If we reach here, there are no more images in the current batch
 		if False:
@@ -391,12 +402,17 @@ class ImageQueue:
 
 		self.close()
 		raise StopIteration
+	'''
 
 	def __enter__(self):
 		return self
 
 	def __exit__(self, exc_type, exc_val, exc_tb):
 		self.close()
+
+	def close(self):
+		self.stop_event.set()
+		self.thread.join()
 
 	def _is_done(self, path):
 		fov, tag = self.path_parts(path)
@@ -410,10 +426,6 @@ class ImageQueue:
 		if not os.path.exists(filepath):
 			return False
 		return True
-
-
-	def close(self):
-		self.executor.shutdown(wait=True)
 
 	def path_parts(self, path):
 		path_obj = Path(path)

@@ -169,6 +169,7 @@ def main():
 		sy = queue.shape[3]
 		# this is a buffer to use for copying into 
 		buffer = cp.empty(queue.shape[1:], dtype=cp.float32)	
+		chan = cp.empty(queue.shape[1:], dtype=cp.uint16)	
 	
 		flats = load_flats(shape = queue.shape, **vars(args.paths))
 
@@ -189,31 +190,17 @@ def main():
 		overlap = args.hybs.overlap
 		tile_size = args.hybs.tile_size
 
-		transfer_stream = cp.cuda.Stream(non_blocking=True)
-		compute_stream = cp.cuda.Stream(non_blocking=True)
 		message = 'Starting image processing.\n'
 		print_clean(message)
-		for image in queue:
-			print(image.path, flush=True)
-			gpu_channels = []
-			transfer_events = []
-			for icol in range(ncol):
-				with transfer_stream:
-					chan_gpu = cp.asarray(image[icol])
-					event = cp.cuda.Event()
-					event.record(transfer_stream)
-					gpu_channels.append(chan_gpu)
-					transfer_events.append(event)
-			for icol in range(ncol - 1):
-				chan = gpu_channels[icol]
-				event = transfer_events[icol]
-
-				# Wait for channel transfer before compute
-				compute_stream.wait_event(event)
-				with compute_stream:
+		for block in queue:
+			for image in block:
+				print(image.path, flush=True)
+				for icol in range(ncol - 1):
+					flat = flats[icol]
+					#chan = chans[icol]
+					chan.set(image[icol])
 					# there is probably a better way to do the Xh stacking
 					Xhf = []
-					flat = flats[icol]
 					for x,y,tile,raw in deconvolver.hybs.tile_wise(chan, flat, **vars(args.hybs)):
 						Xh = find_local_maxima(tile, raw = raw, **vars(args.hybs))
 						keep = cp.all((Xh[:,1:3] >= overlap) & (Xh[:,1:3] < cp.array([tile.shape[1] - overlap, tile.shape[2] - overlap])), axis=-1)
@@ -226,29 +213,24 @@ def main():
 						Xhf.append(Xh)
 					queue.save_hyb( image.path, icol, Xhf)
 					executor.submit(queue.save_hyb, image.path, icol, Xhf)
-					del chan, Xhf, Xh, keep
-
-			# Wait for channel transfer before compute
-			chan = gpu_channels[icol]
-			event = transfer_events[icol]
-			compute_stream.wait_event(event)
-
-			# now do dapi
-			#chan = cp.asarray(image[-1])
-			flat = flats[-1]
-			# Deconvolve in-place into the buffer
-			deconvolver.dapi.apply(chan, flat_field=flat, output=buffer, **vars(args.dapi))
-			# the dapi channel is further normalized by the stdev
-			std_val = float(cp.asnumpy(cp.linalg.norm(buffer.ravel()) / cp.sqrt(buffer.size)))
-			cp.divide(buffer, std_val, out=buffer)
-			Xh_plus = find_local_maxima(buffer, raw = chan, **vars(args.dapi) )
-			cp.multiply(buffer, -1, out=buffer)
-			Xh_minus = find_local_maxima(buffer, raw = chan, **vars(args.dapi) )
-			# save the data
-			queue.save_dapi(image.path, icol, Xh_plus, Xh_minus)
-			executor.submit(queue.save_dapi, image.path, icol, Xh_plus, Xh_minus)
-			#image.clear()
-			del chan, Xh_plus, Xh_minus, image, gpu_channels, chan_gpu, transfer_events
+					del Xhf, Xh, keep
+	
+				# now do dapi
+				#chan = chans[-1]
+				chan.set(image[-1])
+				flat = flats[-1]
+				# Deconvolve in-place into the buffer
+				deconvolver.dapi.apply(chan, flat_field=flat, output=buffer, **vars(args.dapi))
+				# the dapi channel is further normalized by the stdev
+				std_val = float(cp.asnumpy(cp.linalg.norm(buffer.ravel()) / cp.sqrt(buffer.size)))
+				cp.divide(buffer, std_val, out=buffer)
+				Xh_plus = find_local_maxima(buffer, raw = chan, **vars(args.dapi) )
+				cp.multiply(buffer, -1, out=buffer)
+				Xh_minus = find_local_maxima(buffer, raw = chan, **vars(args.dapi) )
+				# save the data
+				queue.save_dapi(image.path, icol, Xh_plus, Xh_minus)
+				executor.submit(queue.save_dapi, image.path, icol, Xh_plus, Xh_minus)
+				del Xh_plus, Xh_minus, image
 
 if __name__ == "__main__":
 	main()
