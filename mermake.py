@@ -224,7 +224,6 @@ def main():
 						keep = cp.all((Xh[:,1:3] >= 0) & (Xh[:,1:3] < cp.array([sx, sy])), axis=-1)
 						Xh = Xh[keep]
 						Xhf.append(Xh)
-					queue.save_hyb( image.path, icol, Xhf)
 					executor.submit(queue.save_hyb, image.path, icol, Xhf)
 					del chan, Xhf, Xh, keep
 
@@ -245,7 +244,6 @@ def main():
 			cp.multiply(buffer, -1, out=buffer)
 			Xh_minus = find_local_maxima(buffer, raw = chan, **vars(args.dapi) )
 			# save the data
-			queue.save_dapi(image.path, icol, Xh_plus, Xh_minus)
 			executor.submit(queue.save_dapi, image.path, icol, Xh_plus, Xh_minus)
 			#image.clear()
 			del chan, Xh_plus, Xh_minus, image, gpu_channels, chan_gpu, transfer_events
