@@ -50,7 +50,7 @@ def main():
 		long_description_content_type="text/markdown",
 		url =  "https://github.com/deprekate/mermake",
 		#scripts=['mermake.py'],
-		entry_points={'console_scripts': ['mermake = mermake.mermake:main']},
+		entry_points={'console_scripts': ['mermake = mermake.__main__:main']},
 		classifiers=[
 			"Programming Language :: Python :: 3",
 			"License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
