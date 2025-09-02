@@ -129,24 +129,18 @@ class Deconvolver:
 			tile_pad[:] = 0.0
 			tile_pad[ zpad:zpad+zdim, xstart:xstart+xdim, ystart:ystart+ydim] = tile      # fill
 			if x == 0:
-				tile_pad[zpad:zpad+zdim, :overlap, ystart:ystart+ydim] = tile[:, :overlap, :][:, ::-1, :]
+				tile_pad[zpad:zpad+zdim, :overlap, ystart:ystart+ydim] = tile_pad[zpad:zpad+zdim, xstart+1:xstart+overlap+1, ystart:ystart+ydim][:, ::-1, :]
 			elif xdim < tile_size + (2 * overlap):
-				tile_pad[zpad:zpad+zdim, xdim:xdim+overlap, ystart:ystart+ydim] = tile[:, -overlap:, :][:, ::-1, :]
-				xend += overlap
+				tile_pad[zpad:zpad+zdim, xstart+xdim:xstart+xdim+overlap, ystart:ystart+ydim] = tile_pad[zpad:zpad+zdim, xstart+xdim-overlap-1:xstart+xdim-1, ystart:ystart+ydim][:, ::-1, :]
+
+			# Update ranges to include any padding already added
+			xstart = 0 if x == 0 else xstart
+			xdim = xdim + overlap if xdim < tile_size + (2 * overlap) else xdim
 
 			if y == 0:
-				tile_pad[zpad:zpad+zdim, xstart:xstart+xdim, :overlap] = tile[:, :, :overlap][:, :, ::-1]
+				tile_pad[zpad:zpad+zdim, xstart:xstart+xdim, :overlap] = tile_pad[zpad:zpad+zdim, xstart:xstart+xdim, ystart+1:ystart+overlap+1][:, :, ::-1]
 			elif ydim < tile_size + 2 * overlap:
-				tile_pad[zpad:zpad+zdim, xstart:xstart+xdim, ydim:ydim+overlap] = tile[:, :, -overlap:][:, :, ::-1]
-				yend += overlap
-			if x == 0 and y == 0:
-				tile_pad[zpad:zpad+zdim, :overlap, :overlap] = tile[:, :overlap, :overlap][:, ::-1, ::-1]
-			elif y == 0 and xdim < tile_size + (2 * overlap):
-				tile_pad[zpad:zpad+zdim, xstart+xdim:xstart+xdim+overlap, :overlap] = tile[:, -overlap:, :overlap][:, ::-1, ::-1]
-			elif x == 0 and ydim < tile_size + (2 * overlap):
-				tile_pad[zpad:zpad+zdim, :overlap, ystart+ydim:ystart+ydim+overlap] = tile[:, :overlap:, -overlap:][:, ::-1, ::-1]
-			elif xdim < tile_size + (2 * overlap) and ydim < tile_size + (2 * overlap):
-				tile_pad[zpad:zpad+zdim, xdim:xdim+overlap, ydim:ydim+overlap] = tile[:, -overlap:, -overlap:][:, ::-1, ::-1]
+				tile_pad[zpad:zpad+zdim, xstart:xstart+xdim, ystart+ydim:ystart+ydim+overlap] = tile_pad[zpad:zpad+zdim, xstart:xstart+xdim, ystart+ydim-overlap-1:ystart+ydim-1][:, :, ::-1]
 
 			# Top z-padding (reflect the first zpad slices downward)
 			tile_pad[:zpad, :, :] = tile_pad[zpad:2*zpad, :, :][::-1, :, :]
