@@ -13,7 +13,7 @@ else:
 import concurrent.futures
 
 # put this first to make sure to capture the correct gpu
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # Change "1" to the desired GPU ID
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"  # Change "1" to the desired GPU ID
 import cupy as cp
 #cp.cuda.Device(0).use() # The above export doesnt always work so force CuPy to use GPU 0
 import numpy as np
@@ -22,8 +22,9 @@ import numpy as np
 from mermake.deconvolver import Deconvolver
 from mermake.maxima import find_local_maxima
 #from more.maxima import find_local_maxima
-from mermake.io import image_generator, load_flats
-from mermake.io import ImageQueue, read_cim, dict_to_namespace
+from mermake.io import load_flats
+from mermake.io import ImageQueue, dict_to_namespace
+from mermake.align import Aligner 
 import mermake.blur as blur
 
 
@@ -91,15 +92,21 @@ class CustomArgumentParser(argparse.ArgumentParser):
 		super().error(message)
 
 def view_napari(queue, deconvolver, args ):
-	image = next(queue)
+	block = next(queue)
+	image = block #next(iter(block))
 	buffer = deconvolver.buffer
 	flats = deconvolver.flats
 	import napari
 	viewer = napari.Viewer()
 	color = ['red','green','blue', 'white']
-	ncol = queue.shape[0]
-	for icol in range(ncol-1):
-		chan = image[icol]
+	ncol = image.shape[0]
+	for icol in [0]: #range(ncol-1):
+		#chan = cp.asarray(image[icol])
+		chan = cp.asarray(image)
+		chan = cp.pad(chan, ((1,1),(0,4),(0,6)) )
+		print(chan.shape)
+		chan[0] = chan[1]
+		chan[-1] = chan[-1]
 		flat = flats[icol]
 		deconvolver.hybs.apply(chan, flat_field=flat, output=buffer, blur_radius=None)
 		deco = cp.asnumpy(buffer)
@@ -113,6 +120,7 @@ def view_napari(queue, deconvolver, args ):
 		# Add corresponding points for this stack
 		points = cp.asnumpy(Xh[:, :3])
 		viewer.add_points(points, size=7, border_color=color[icol],face_color='transparent', opacity=0.6, name=f"maxima {icol}")
+	'''
 	icol += 1
 	chan = image[icol]
 	flat = flats[icol]
@@ -128,6 +136,7 @@ def view_napari(queue, deconvolver, args ):
 	viewer.add_image(stacked, name="dapi",  colormap=color[icol], blending='additive')
 	points = cp.asnumpy(Xh_plus[:, :3])
 	viewer.add_points(points, size=11, border_color=color[icol], face_color='transparent', opacity=0.6, name=f"maxima dapi")
+	'''
 	napari.run()
 	exit()
 
@@ -158,7 +167,6 @@ def main():
 	# the save file executor to do the saving in parallel with computations
 	executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 
-	
 	message = 'Finding input image files.'
 	print_clean(message)
 	with ImageQueue(args) as queue:
@@ -193,8 +201,62 @@ def main():
 		message = 'Starting image processing.\n'
 		print_clean(message)
 		for block in queue:
+			if block.background:
+				icol = -1
+				chan.set(block.background[icol])
+				flat = flats[icol]
+				deconvolver.dapi.apply(chan, flat_field=flat, output=buffer, **vars(args.dapi))
+				# the dapi channel is further normalized by the stdev
+				std_val = float(cp.asnumpy(cp.linalg.norm(buffer.ravel()) / cp.sqrt(buffer.size)))
+				cp.divide(buffer, std_val, out=buffer)
+				Xh_plus = find_local_maxima(buffer, raw = chan, **vars(args.dapi) )
+				cp.multiply(buffer, -1, out=buffer)
+				Xh_minus = find_local_maxima(buffer, raw = chan, **vars(args.dapi) )
+				queue.save_dapi(block.background.path, icol, Xh_plus, Xh_minus)
+
+				aligner = Aligner(Xh_plus[:,:3])
+				
 			for image in block:
 				print(image.path, flush=True)
+				icol = -1
+				chan.set(image[icol])
+				flat = flats[icol]
+				# Deconvolve in-place into the buffer
+				deconvolver.dapi.apply(chan, flat_field=flat, output=buffer, **vars(args.dapi))
+				# the dapi channel is further normalized by the stdev
+				std_val = float(cp.asnumpy(cp.linalg.norm(buffer.ravel()) / cp.sqrt(buffer.size)))
+				cp.divide(buffer, std_val, out=buffer)
+				Xh_plus = find_local_maxima(buffer, raw = chan, **vars(args.dapi) )
+				cp.multiply(buffer, -1, out=buffer)
+				Xh_minus = find_local_maxima(buffer, raw = chan, **vars(args.dapi) )
+				# save the data
+				executor.submit(queue.save_dapi, image.path, icol, Xh_plus, Xh_minus)
+			
+				if block.background:
+				 slices_back, slices_chan = aligner.get_shifted_slices( Xh_plus[:,:3], chan.shape )
+				
+				del Xh_plus, Xh_minus
+				#import napari
+				#viewer = napari.Viewer()
+				icol = 0
+				im_bk = block.background[icol]
+				im_sig = image[icol]
+				immed = cp.asnumpy(flat)
+				im_sig_ = (np.array(im_sig,dtype=np.float32)/immed)[slices_chan]
+				im_bk_ = (np.array(im_bk,dtype=np.float32)/immed)[slices_back]
+				fixed = im_sig_ - im_bk_
+				#viewer.add_image(im_bk_, name='background')
+				#viewer.add_image(im_sig_, name='signal')
+				deconvolver.buffer = buffer
+				deconvolver.flats = flats
+				view_napari(iter([fixed]), deconvolver, args)
+				#from mermake.deconvolver import full_deconv
+				#deconv = full_deconv(cp.asarray(fixed), psfs=psfs, flat_field = cp.asarray(immed), beta = 0.0001) 
+				#viewer.add_image(fixed, name ='difference')
+				#viewer.add_image(cp.asnumpy(deconv), name ='deconv')
+				napari.run()
+				os._exit(1)
+
 				for icol in range(ncol - 1):
 					flat = flats[icol]
 					#chan = chans[icol]
@@ -211,26 +273,10 @@ def main():
 						keep = cp.all((Xh[:,1:3] >= 0) & (Xh[:,1:3] < cp.array([sx, sy])), axis=-1)
 						Xh = Xh[keep]
 						Xhf.append(Xh)
-					queue.save_hyb( image.path, icol, Xhf)
 					executor.submit(queue.save_hyb, image.path, icol, Xhf)
 					del Xhf, Xh, keep
+				del image
 	
-				# now do dapi
-				#chan = chans[-1]
-				chan.set(image[-1])
-				flat = flats[-1]
-				# Deconvolve in-place into the buffer
-				deconvolver.dapi.apply(chan, flat_field=flat, output=buffer, **vars(args.dapi))
-				# the dapi channel is further normalized by the stdev
-				std_val = float(cp.asnumpy(cp.linalg.norm(buffer.ravel()) / cp.sqrt(buffer.size)))
-				cp.divide(buffer, std_val, out=buffer)
-				Xh_plus = find_local_maxima(buffer, raw = chan, **vars(args.dapi) )
-				cp.multiply(buffer, -1, out=buffer)
-				Xh_minus = find_local_maxima(buffer, raw = chan, **vars(args.dapi) )
-				# save the data
-				queue.save_dapi(image.path, icol, Xh_plus, Xh_minus)
-				executor.submit(queue.save_dapi, image.path, icol, Xh_plus, Xh_minus)
-				del Xh_plus, Xh_minus, image
 
 if __name__ == "__main__":
 	main()

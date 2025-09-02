@@ -12,6 +12,7 @@ import functools
 import concurrent.futures
 import queue
 import threading
+from itertools import chain
 
 import xml.etree.ElementTree as ET
 import zarr
@@ -185,12 +186,21 @@ def get_ifov(zarr_file_path):
 	if match:
 		return int(match.group(1))
 	raise ValueError(f"No digits found before .zarr in filename: {filename}")
+def get_iset(zarr_file_path):
+	"""Extract iset from filename - finds last digits after the word set"""
+	filename = Path(zarr_file_path).name  # Keep full filename with extension
+	match = re.search(r'_set([0-9]+)', filename)
+	if match:
+		return int(match.group(1))
+	raise ValueError(f"No digits found after the word _set in filename: {filename}")
 
 class FolderFilter:
-	def __init__(self, hyb_range: str, regex_pattern: str):
+	def __init__(self, hyb_range: str, regex_pattern: str, fov_min: float, fov_max: float):
 		self.hyb_range = hyb_range
 		self.regex = re.compile(regex_pattern)
-		self.start_pattern, self.end_pattern = self.hyb_range.split(':')
+		self.start_pattern, self.end_pattern = self.hyb_range.split(':')	
+		self.fov_min = fov_min
+		self.fov_max = fov_max
 		
 		# Parse start and end patterns
 		self.start_parts = self._parse_pattern(self.start_pattern)
@@ -261,47 +271,61 @@ class FolderFilter:
 				
 		return matching_files
 
+	def get_matches(self, folders):
+		matches = dict()
+		for root in folders:
+			if not os.path.exists(root):
+				continue
+			try:
+				with os.scandir(root) as entries:
+					for sub in entries:
+						if sub.is_dir(follow_symlinks=False) and self.isin(sub.name):
+							try:
+								with os.scandir(sub.path) as items:
+									# we might need other ways to determine set
+									iset = get_iset(str(sub.name))
+									for item in items:
+										if item.is_dir(follow_symlinks=False) and '.zarr' in item.name:
+											ifov = get_ifov(str(item.name))
+											if self.fov_min <= ifov <= self.fov_max:
+												matches.setdefault((iset,ifov), []).append(item.path)
+
+							except PermissionError:
+								continue
+			except PermissionError:
+				continue
+		return matches
+class Block(list):
+	def __init__(self, items=None):
+		self.background = None
+		if isinstance(items, (list, tuple)):
+			for item in items:
+				self.append(item)
+		elif items:
+			self.append(items)
+
 class ImageQueue:
 	__version__ = __version__
-	def __init__(self, args, prefetch_count=4):
+	def __init__(self, args, prefetch_count=6):
 		self.args = args
 		self.args_array = namespace_to_array(self.args.settings)
 		self.__dict__.update(vars(args.paths))
 
 		os.makedirs(self.output_folder, exist_ok = True)
 		
-		folder_filter = FolderFilter(self.hyb_range, self.regex)
-		
 		fov_min, fov_max = (-float('inf'), float('inf'))
 		if hasattr(self, "fov_range"):
-			fov_min, fov_max = map(int, self.fov_range.split(':'))
-	
-		matches = dict()
-		for root in self.hyb_folders:
-			if not os.path.exists(root):
-				continue
-			try:
-				with os.scandir(root) as entries:
-					for sub in entries:
-						if sub.is_dir(follow_symlinks=False) and folder_filter.isin(sub.name):
-							try:
-								with os.scandir(sub.path) as items:
-									for item in items:
-										if item.is_dir(follow_symlinks=False) and '.zarr' in item.name:
-											ifov = get_ifov(str(item.name))
-											if fov_min <= ifov <= fov_max:
-												matches.setdefault(ifov, []).append(item.path)
-
-							except PermissionError:
-								continue
-			except PermissionError:
-				continue
-		matches = [item for sublist in matches.values() for item in sublist]
+			fov_min, fov_max = map(float, self.fov_range.split(':'))
+		matches = FolderFilter(self.hyb_range, self.regex, fov_min, fov_max).get_matches(self.hyb_folders)
+		background = None
+		if hasattr(self, "background_range"):
+			background = FolderFilter(self.background_range, self.regex, fov_min, fov_max).get_matches(self.hyb_folders)
+			self.background = True
 
 		# Peek at first image to set shape/dtype
-		for f in matches:
+		for path in chain.from_iterable(matches.values()):
 			try:
-				first_image = read_im(f)
+				first_image = read_im(path)
 				break
 			except:
 				continue
@@ -312,29 +336,47 @@ class ImageQueue:
 		
 		# Filter out already processed files
 		if hasattr(self, "redo") and not self.redo:
-			#matches = [f for f in sorted(matches) if not self._is_done(f)]
-			matches = [f for f in matches if not self._is_done(f)]
-
+			new_matches = {}
+			for key, files in matches.items():
+				filtered = [f for f in files if not self._is_done(f)]
+				if filtered:
+					new_matches[key] = filtered
+			matches = new_matches
+		
+		# interlace the background with the regular images
+		shared = set(matches.keys()).intersection(background.keys()) if background else matches.keys()
+		#matches = [item for key in shared for item in matches[key]]
+		#background = [item for key in shared for item in background[key]] if background else None
+		interlaced = []
+		for key in shared:
+			if background and key in background:
+				interlaced.extend(background[key])  # put background first
+			interlaced.extend(matches[key])		 # then all matches for that key
+		
 		#self.files = iter(sorted(matches))
-		self.files = iter(matches)
+		self.files = iter(interlaced)
 
+		self.block = Block()
 		# Start worker thread(s)
 		self.queue = queue.Queue(maxsize=prefetch_count)
 		self.stop_event = threading.Event()
 		self.thread = threading.Thread(target=self._worker, daemon=True)
 		self.thread.start()
-		self.block = []
 
 	def _worker(self):
 		"""Continuously read images and put them in the queue."""
-		for fpath in self.files:
+		for path in self.files:
 			if self.stop_event.is_set():
 				break
 			try:
-				img = read_im(fpath)
-				self.queue.put(img)  # Blocks if queue is full
+				im = read_im(path)
+				self.queue.put(im)  # Blocks if queue is full
 			except Exception as e:
-				# print(f"Warning: failed to read {fpath}: {e}")
+				print(f"Warning: failed to read {path}: {e}")
+				#dummy = lambda : None
+				#dummy.path = path
+				#self.queue.put(dummy)
+				self.queue.put(False)
 				continue
 		# Signal no more images
 		self.queue.put(None)
@@ -342,28 +384,6 @@ class ImageQueue:
 	def __iter__(self):
 		return self
 
-	def __next__(self):
-		"""Return the next block of images (same FOV)."""
-		block = self.block
-		first_item = self.queue.get()
-		if first_item is None:
-			raise StopIteration
-		
-		self.block.append(first_item)
-		first_fov = get_ifov(first_item.path)  # assuming image has .path attr
-
-		# Keep consuming queue until FOV changes or None
-		while True:
-			item = self.queue.get()
-			if item is None:
-				self.queue.put(None)
-				break
-			if get_ifov(item.path) != first_fov:
-				self.block = [item]
-				break
-			block.append(item)
-
-		return block
 	'''
 	def __next__(self):
 		img = self.queue.get()
@@ -371,8 +391,103 @@ class ImageQueue:
 			raise StopIteration
 		return img
 	'''
+	
+	def __next__(self):
+		"""Return the next block of images (same FOV)."""
+		block = self.block
+		first_item = self.queue.get()
+		if first_item is None:
+			raise StopIteration
+		
+		if hasattr(self, "background_range"):
+			self.block.background = first_item
+		else:
+			block.append(first_item)
+		ifov = None if first_item == False else get_ifov(first_item.path)
+
+		# Keep consuming queue until FOV changes or None
+		while True:
+			item = self.queue.get()
+			if item == False:
+				break
+			if item is None:
+				self.queue.put(None)
+				break
+			if get_ifov(item.path) != ifov:
+				if hasattr(self, "background_range"):
+					self.block.background = item
+				else:
+					self.block = Block(item)
+				break
+			block.append(item)
+		if hasattr(self, "background_range") and first_item == False:
+			block.clear()	
+		return block
+
+	'''
+	def __next__(self):
+		"""Return the next block of images (same FOV)."""
+		logger.debug(f"__next__ called, queue size: {getattr(self.queue, 'qsize', lambda: 'unknown')()}")
+		
+		block = Block()  # Fresh block each time
+		
+		# Get first item with debugging
+		logger.debug("Getting first item from queue...")
+		start_time = time.time()
+		first_item = self.queue.get()
+		get_time = time.time() - start_time
+		logger.debug(f"Got first item in {get_time:.3f}s: {type(first_item).__name__}")
+		
+		if first_item is None:
+			logger.debug("First item is None, raising StopIteration")
+			raise StopIteration
+		
+		block.append(first_item)
+		
+		# Handle FOV logic with debugging
+		if first_item == False:
+			ifov = None
+			logger.debug("First item is False, ifov = None")
+		else:
+			logger.debug(f"Getting ifov for: {getattr(first_item, 'path', 'NO_PATH_ATTR')}")
+			ifov = get_ifov(first_item.path)
+			logger.debug(f"ifov = {ifov}")
+		
+		# Keep consuming queue until FOV changes or None
+		item_count = 1
+		while True:
+			logger.debug(f"Loop iteration {item_count}, getting next item...")
+			start_time = time.time()
+			item = self.queue.get()
+			get_time = time.time() - start_time
+			logger.debug(f"Got item {item_count} in {get_time:.3f}s: {type(item).__name__}")
+			
+			if item == False:
+				logger.debug("Got False, breaking")
+				break
+			if item is None:
+				logger.debug("Got None, putting back and breaking")
+				self.queue.put(None)
+				break
+			
+			logger.debug(f"Getting ifov for item {item_count}: {getattr(item, 'path', 'NO_PATH_ATTR')}")
+			item_ifov = get_ifov(item.path)
+			logger.debug(f"Item ifov: {item_ifov}, current ifov: {ifov}")
+			
+			if item_ifov != ifov:
+				logger.debug("FOV changed, putting item back and breaking")
+				self.queue.put(item)  # Put back the item with different FOV
+				break
+			
+			block.append(item)
+			item_count += 1
+			logger.debug(f"Added item to block, block size now: {len(block)}")
+		
+		logger.debug(f"Returning block with {len(block)} items")
+		return block
 	'''
 
+	'''
 		# If we reach here, there are no more images in the current batch
 		if False:
 			# In watch mode, look for new files
@@ -485,21 +600,36 @@ class ImageQueue:
 		if xp == cp:
 			xp._default_memory_pool.free_all_blocks()
 
-
-def image_generator(hybs, fovs):
-	"""Generator that prefetches the next image while processing the current one."""
-	with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-		future = None
-		for all_flds, fov in zip(hybs, fovs):
-			for hyb in all_flds:
-
-				file = os.path.join(hyb, fov)
-				next_future = executor.submit(read_cim, file)
-				if future:
-					yield future.result()
-				future = next_future
-		if future:
-			yield future.result()
+# Debugging wrapper for your main processing loop
+def debug_processing_loop(queue):
+	"""Wrapper to add debugging around your processing loop"""
+	logger.info("Starting processing loop")
+	block_count = 0
+	
+	try:
+		for block in queue:
+			block_count += 1
+			logger.info(f"Processing block {block_count} with {len(block)} images")
+			
+			for i, image in enumerate(block):
+				logger.debug(f"Processing image {i+1}/{len(block)} in block {block_count}")
+				
+				# Time the GPU operations
+				start_time = time.time()
+				cim = cp.asarray(image)  # This might be where it stalls
+				asarray_time = time.time() - start_time
+				logger.debug(f"cp.asarray took {asarray_time:.3f}s")
+				
+				start_time = time.time()
+				gpu_compute(cim)  # Or this might be where it stalls
+				compute_time = time.time() - start_time
+				logger.debug(f"gpu_compute took {compute_time:.3f}s")
+				
+			logger.info(f"Completed block {block_count}")
+			
+	except Exception as e:
+		logger.error(f"Error in processing loop at block {block_count}: {e}", exc_info=True)
+	logger.info(f"Processing loop completed, processed {block_count} blocks")
 
 
 from .utils import *
