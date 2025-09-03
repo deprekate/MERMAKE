@@ -6,6 +6,7 @@ import numpy as np
 
 #from . import blur
 import blur
+from mermake.fill import reflect
 
 def repeat_last(iterable):
 	it = iter(iterable)
@@ -121,48 +122,40 @@ class Deconvolver:
 			# flat field correction
 			if flat_field is not None:
 				cp.divide(tile, flat, out=tile)
-			# reflect padding along the z axis
-			#tile_pad[	  : zpad, :, :] = tile[zpad-1::-1   , :, :] # reflect down
-			#tile_pad[ zpad:-zpad, :, :] = tile                      # fill
-			#tile_pad[-zpad:		, :, :] = tile[-1:-zpad-1:-1, :, :] # reflect up
-			# this will allow images with different z to not error
+			
 			tile_pad[:] = 0.0
 			tile_pad[ zpad:zpad+zdim, xstart:xstart+xdim, ystart:ystart+ydim] = tile      # fill
+
+			# x reflect at left and right
 			if x == 0:
-				tile_pad[zpad:zpad+zdim, :overlap, ystart:ystart+ydim] = tile_pad[zpad:zpad+zdim, xstart+1:xstart+overlap+1, ystart:ystart+ydim][:, ::-1, :]
+				reflect(tile_pad, ystart, mode='in', axis=1)
 			elif xdim < tile_size + (2 * overlap):
-				tile_pad[zpad:zpad+zdim, xstart+xdim:xstart+xdim+overlap, ystart:ystart+ydim] = tile_pad[zpad:zpad+zdim, xstart+xdim-overlap-1:xstart+xdim-1, ystart:ystart+ydim][:, ::-1, :]
-
-			# Update ranges to include any padding already added
-			xstart = 0 if x == 0 else xstart
-			xdim = xdim + overlap if xdim < tile_size + (2 * overlap) else xdim
-
+				reflect(tile_pad, xstart+xdim-1, mode='out', axis=1)
+			# y reflect at top and bottom
 			if y == 0:
-				tile_pad[zpad:zpad+zdim, xstart:xstart+xdim, :overlap] = tile_pad[zpad:zpad+zdim, xstart:xstart+xdim, ystart+1:ystart+overlap+1][:, :, ::-1]
-			elif ydim < tile_size + 2 * overlap:
-				tile_pad[zpad:zpad+zdim, xstart:xstart+xdim, ystart+ydim:ystart+ydim+overlap] = tile_pad[zpad:zpad+zdim, xstart:xstart+xdim, ystart+ydim-overlap-1:ystart+ydim-1][:, :, ::-1]
+				reflect(tile_pad, ystart, mode='in', axis=2)
+			elif ydim < tile_size + (2 * overlap):
+				reflect(tile_pad, ystart+ydim-1, mode='out', axis=2)
 
-			# Top z-padding (reflect the first zpad slices downward)
-			tile_pad[:zpad, :, :] = tile_pad[zpad:2*zpad, :, :][::-1, :, :]
+			# treat z padding differently due to the possibilty of slice thinner than precomputed psf
+			# repeat padding
+			tile_pad[:zpad, :, :] = tile_pad[zpad, :, :]
+			tile_pad[-zpad:, :, :] = tile_pad[zpad+zdim-1, :, :]
+			# z reflect down
+			tile_pad[zpad - zdim:zpad, :, :] = tile_pad[zpad:zpad+zdim, :, :][::-1, :, :]
+			# z relfect up
+			tile_pad[zpad + zdim:zpad + zdim + zpad, :, :] = tile_pad[zdim:zpad+zdim, :, :][::-1, :, :]
 
-			# Bottom z-padding (reflect the last zpad slices upward)
-			tile_pad[zpad + zdim:zpad + zdim + zpad, :, :] = tile_pad[zpad + zdim - zpad:zpad + zdim, :, :][::-1, :, :]
-
-			# flat field correction
-			#if flat_field is not None:
-			#	cp.divide(tile_pad[zpad:-zpad], flat, out=tile_pad[zpad:-zpad])
-			#yield x,y,tile_pad,tile
-			
 			# the fft convolution and deconvolution
 			tile_fft[:] = xp.fft.fftn(tile_pad)
 			xp.multiply(tile_fft, psf_fft, out=tile_fft)
 			tile_res[:] = xp.fft.ifftn(tile_fft)[zpad:-zpad].real
 
 			# optional blur subtraction
-			#if blur_radius is not None:
-			#	blur.box_1d(tile_res, blur_radius, axis=1, output=tile_buf)
-			#	blur.box_1d(tile_buf, blur_radius, axis=2, output=tile_tem)
-			#	xp.subtract(tile_res, tile_tem, out=tile_res)
+			if blur_radius is not None:
+				blur.box_1d(tile_res, blur_radius, axis=1, output=tile_buf)
+				blur.box_1d(tile_buf, blur_radius, axis=2, output=tile_tem)
+				xp.subtract(tile_res, tile_tem, out=tile_res)
 
 			yield x,y,tile_res,tile_pad
 
