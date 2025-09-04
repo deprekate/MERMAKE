@@ -155,7 +155,7 @@ class Deconvolver:
 				blur.box_1d(tile_buf, blur_radius, axis=2, output=tile_tem)
 				xp.subtract(tile_res, tile_tem, out=tile_res)
 			
-			yield x,y,tile_res,tile_pad
+			yield x,y,tile_res,tile
 
 	def apply(self, image, flat_field=None, blur_radius=None, output=None, **kwargs):
 		xp = cp.get_array_module(image)
