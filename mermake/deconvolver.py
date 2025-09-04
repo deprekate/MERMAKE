@@ -4,9 +4,8 @@ from itertools import zip_longest, chain, repeat, cycle
 import cupy as cp
 import numpy as np
 
-#from . import blur
-import blur
-from mermake.fill import reflect
+from . import blur
+from .fill import reflect
 
 def repeat_last(iterable):
 	it = iter(iterable)
@@ -128,15 +127,14 @@ class Deconvolver:
 
 			# x reflect at left and right
 			if x == 0:
-				reflect(tile_pad, ystart, mode='in', axis=1)
+				reflect(tile_pad, overlap, mode='in', axis=1)
 			elif xdim < tile_size + (2 * overlap):
-				reflect(tile_pad, xstart+xdim-1, mode='out', axis=1)
+				reflect(tile_pad, xdim-1, mode='out', axis=1)
 			# y reflect at top and bottom
 			if y == 0:
-				reflect(tile_pad, ystart, mode='in', axis=2)
+				reflect(tile_pad, overlap, mode='in', axis=2)
 			elif ydim < tile_size + (2 * overlap):
-				reflect(tile_pad, ystart+ydim-1, mode='out', axis=2)
-
+				reflect(tile_pad, ydim-1, mode='out', axis=2)
 			# treat z padding differently due to the possibilty of slice thinner than precomputed psf
 			# repeat padding
 			tile_pad[:zpad, :, :] = tile_pad[zpad, :, :]
@@ -156,7 +154,7 @@ class Deconvolver:
 				blur.box_1d(tile_res, blur_radius, axis=1, output=tile_buf)
 				blur.box_1d(tile_buf, blur_radius, axis=2, output=tile_tem)
 				xp.subtract(tile_res, tile_tem, out=tile_res)
-
+			
 			yield x,y,tile_res,tile_pad
 
 	def apply(self, image, flat_field=None, blur_radius=None, output=None, **kwargs):
