@@ -2,6 +2,7 @@ import os
 import re
 import gc
 import glob
+from pathlib import Path
 from fnmatch import fnmatch
 from types import SimpleNamespace
 from typing import List, Tuple, Optional
@@ -15,7 +16,7 @@ import threading
 from itertools import chain
 
 import xml.etree.ElementTree as ET
-import zarr
+import dask.array as da
 import cupy as cp
 import numpy as np
 
@@ -43,72 +44,71 @@ def load_flats(flat_field_tag, shape=None, **kwargs):
 		stack.append(blurred)
 	return cp.stack(stack)
 
-def get_iH(fld): return int(os.path.basename(fld).split('_')[0][1:])
-def get_files(master_data_folders, set_ifov,iHm=None,iHM=None):
-	#if not os.path.exists(save_folder): os.makedirs(save_folder)
-	all_flds = []
-	for master_folder in master_data_folders:
-		all_flds += glob.glob(master_folder+os.sep+r'H*_AER_*')
-		#all_flds += glob.glob(master_folder+os.sep+r'H*_Igfbpl1_Aldh1l1_Ptbp1*')
-	### reorder based on hybe
-	all_flds = np.array(all_flds)[np.argsort([get_iH(fld)for fld in all_flds])] 
-	set_,ifov = set_ifov
-	all_flds = [fld for fld in all_flds if set_ in os.path.basename(fld)]
-	all_flds = [fld for fld in all_flds if ((get_iH(fld)>=iHm) and (get_iH(fld)<=iHM))]
-	#fovs_fl = save_folder+os.sep+'fovs__'+set_+'.npy'
-	folder_map_fovs = all_flds[0]#[fld for fld in all_flds if 'low' not in os.path.basename(fld)][0]
-	fls = glob.glob(folder_map_fovs+os.sep+'*.zarr')
-	fovs = np.sort([os.path.basename(fl) for fl in fls])
-	fov = fovs[ifov]
-	all_flds = [fld for fld in all_flds if os.path.exists(fld+os.sep+fov)]
-	return all_flds,fov
+def path_parts(path):
+	path_obj = Path(path)
+	fov = path_obj.stem  # The filename without extension
+	tag = path_obj.parent.name  # The parent directory name (which you seem to want)
+	return fov, tag
+
 
 class Container:
-	def __init__(self, data, **kwargs):
-		# Store the data and any additional metadata
-		self.data = data
-		self.metadata = kwargs
-	def __getitem__(self, item):
-		# Allow indexing into the container
-		return self.data[item]
-	def __array__(self):
-		# Return the underlying array
-		return self.data
-	def __repr__(self):
-		return f"Container(shape={self.data.shape}, dtype={self.data.dtype}, metadata={self.metadata})"
-	def __getattr__(self, name):
-		if name in self.metadata:
-			return self.metadata[name]
-		if hasattr(self.data, name):
-			return getattr(self.data, name)
-		raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
-
-def containerize(func):
-	@functools.wraps(func)
-	def wrapper(*args, **kwargs):
-		result = func(*args, **kwargs)
-		metadata = dict(kwargs)
-		if args:
-			metadata['path'] = args[0]
-		if isinstance(result, tuple):
-			arr, *rest = result
-			if len(rest) == 2:
-				metadata['x'], metadata['y'] = rest
-			return Container(arr, **metadata)
+	def __init__(self, path_or_array):
+		if isinstance(path_or_array, str):
+			# Load from file
+			im = read_im(path_or_array)
+			# Always split first axis into channels
+			self.data = [Container(im[i]) for i in range(im.shape[0])]
+			self.path = path_or_array
 		else:
-			return Container(result, **metadata)
-	return wrapper
+			# Already an array, just store it
+			self.data = path_or_array
+			self.path = None
 
-@containerize
+	def __getitem__(self, idx):
+		return self.data[idx]
+
+	def __repr__(self):
+		if isinstance(self.data, list):
+			shapes = [getattr(ch.data, "shape", None) if isinstance(ch, Container) else getattr(ch, "shape", None)
+					  for ch in self.data]
+			return f"Container(path={self.path}, shapes={shapes})"
+		else:
+			return f"Container(shape={getattr(self.data, 'shape', None)})"
+
+	def __array__(self, dtype=None):
+		"""
+		Return the underlying array for NumPy/CuPy interop.
+		Called automatically when passed to np.array() or cupy.set().
+		"""
+		if isinstance(self.data, list):
+			raise ValueError("Cannot convert a multi-channel Container to a single array")
+		arr = self.data
+		if dtype is not None:
+			arr = arr.astype(dtype)
+		return arr
+
+	def compute(self):
+		"""Compute only the current container (recursively if channels)."""
+		if isinstance(self.data, list):
+			for i, ch in enumerate(self.data):
+				self.data[i] = ch.compute()  # recurse into sub-containers
+			return self
+		elif isinstance(self.data, da.Array):
+			self.data = self.data.compute()
+			return self
+		else:
+			return self
+
+
 def read_im(path, return_pos=False):
 	dirname = os.path.dirname(path)
 	fov = os.path.basename(path).split('_')[-1].split('.')[0]
 	file_ = os.path.join(dirname, fov, 'data')
 
-	z = zarr.open(file_, mode='r')
-	image = np.array(z[1:])
-	#from dask import array as da
-	#image = da.from_zarr(file_)[1:]
+	#z = zarr.open(file_, mode='r')
+	#image = np.array(z[1:])
+	from dask import array as da
+	image = da.from_zarr(file_)[1:]
 
 	shape = image.shape
 	xml_file = os.path.splitext(path)[0] + '.xml'
@@ -132,67 +132,38 @@ def read_im(path, return_pos=False):
 		return image, x, y
 	return image
 
-def read_cim(path):
-	im = read_im(path)
-	cim = cp.asarray(im)
-	container = Container(cim)
-	container.path = path
-	return container
+def get_ih(file_path):
+	basename = os.path.basename(file_path)
+	m = re.search(r'\d+', basename)  # first contiguous digits
+	if m:
+		return int(m.group())
+	raise ValueError(f"No number found in {basename}")
 
-def read_ccim(path, return_pos=False):
-	dirname = os.path.dirname(path)
-	fov = os.path.basename(path).split('_')[-1].split('.')[0]
-	file_ = os.path.join(dirname, fov, 'data')
-
-	z = zarr.open(file_, mode='r')
-	nz = z.shape[0]
-
-	# Skip z[0], start at z[1]
-	slices = []
-	for i in range(1, nz):
-		slices.append(cp.asarray(z[i]))
-
-	image = cp.stack(slices)
-	shape = image.shape
-
-	xml_file = os.path.splitext(path)[0] + '.xml'
-	if os.path.exists(xml_file):
-		txt = open(xml_file, 'r').read()
-		tag = '<z_offsets type="string">'
-		zstack = txt.split(tag)[-1].split('</')[0]
-
-		tag = '<stage_position type="custom">'
-		x, y = eval(txt.split(tag)[-1].split('</')[0])
-
-		nchannels = int(zstack.split(':')[-1])
-		nzs = (shape[0] // nchannels) * nchannels
-		image = image[:nzs].reshape((shape[0] // nchannels, nchannels, shape[-2], shape[-1]))
-		image = cp.swapaxes(image, 0, 1)
-
-	if image.dtype == cp.uint8:
-		image = image.astype(cp.uint16) ** 2
-
-	container = Container(image)
-	container.path = path
-
-	if return_pos:
-		return container, x, y
-	return container
-
-def get_ifov(zarr_file_path):
+def get_ifov(file_path):
 	"""Extract ifov from filename - finds last digits before .zarr"""
-	filename = Path(zarr_file_path).name  # Keep full filename with extension
+	filename = Path(file_path).name  # Keep full filename with extension
 	match = re.search(r'([0-9]+)[^0-9]*\.zarr', filename)
 	if match:
 		return int(match.group(1))
 	raise ValueError(f"No digits found before .zarr in filename: {filename}")
-def get_iset(zarr_file_path):
-	"""Extract iset from filename - finds last digits after the word set"""
-	filename = Path(zarr_file_path).name  # Keep full filename with extension
+
+def get_iset(file_path):
+	"""
+	Recursively extract 'iset' from filename or parent directories.
+	Finds last digits after the word '_set'.
+	"""
+	path = Path(file_path)  # ensure Path object
+	filename = path.name
 	match = re.search(r'_set([0-9]+)', filename)
 	if match:
 		return int(match.group(1))
-	raise ValueError(f"No digits found after the word _set in filename: {filename}")
+
+	# Base case: reached root
+	if path.parent == path:
+		raise ValueError(f"No digits found after the word _set in {file_path}")
+
+	# Recurse up
+	return get_iset(path.parent)
 
 class FolderFilter:
 	def __init__(self, hyb_range: str, regex_pattern: str, fov_min: float, fov_max: float):
@@ -295,6 +266,7 @@ class FolderFilter:
 			except PermissionError:
 				continue
 		return matches
+
 class Block(list):
 	def __init__(self, items=None):
 		self.background = None
@@ -303,7 +275,19 @@ class Block(list):
 				self.append(item)
 		elif items:
 			self.append(items)
-
+	def parts(self):
+		path = self[0].path
+		fov, tag = path_parts(path)
+		return fov, tag
+	def fov(self):
+		fov,_ = self.parts()
+		return fov
+	def tag(self):
+		_,tag = self.parts()
+		return tag
+	def iset(self):
+		return get_iset(self[0].path)
+	
 class ImageQueue:
 	__version__ = __version__
 	def __init__(self, args, prefetch_count=6):
@@ -333,16 +317,7 @@ class ImageQueue:
 			raise RuntimeError("No valid images found.")
 		self.shape = first_image.shape
 		self.dtype = first_image.dtype
-		
-		# Filter out already processed files
-		if hasattr(self, "redo") and not self.redo:
-			new_matches = {}
-			for key, files in matches.items():
-				filtered = [f for f in files if not self._is_done(f)]
-				if filtered:
-					new_matches[key] = filtered
-			matches = new_matches
-		
+	
 		# interlace the background with the regular images
 		shared = set(matches.keys()).intersection(background.keys()) if background else matches.keys()
 		#matches = [item for key in shared for item in matches[key]]
@@ -351,9 +326,9 @@ class ImageQueue:
 		for key in shared:
 			if background and key in background:
 				interlaced.extend(background[key])  # put background first
-			interlaced.extend(matches[key])		 # then all matches for that key
+			hsorted = self.hsorted(matches[key])
+			interlaced.extend(hsorted)			# then all matches for that iset,ifov
 		
-		#self.files = iter(sorted(matches))
 		self.files = iter(interlaced)
 
 		self.block = Block()
@@ -363,14 +338,42 @@ class ImageQueue:
 		self.thread = threading.Thread(target=self._worker, daemon=True)
 		self.thread.start()
 
+	def hsorted(self, files):
+		return sorted(files, key=lambda f: get_ih(os.path.dirname(f)))
+
+	def containerize(self, path):
+		# everythign in this method is done async and prefetched
+
+		container = Container(path)
+
+		fit_files = list()
+		# check if the fov has been fitted
+		fov, tag = path_parts(path)
+		for icol in range(self.shape[0] - 1):
+			filename = self.hyb_save.format(fov=fov, tag=tag, icol=icol)
+			filepath = os.path.join(self.output_folder, filename)
+			if not os.path.exists(filepath):
+				container[icol].compute()
+			else:
+				container[icol].fits = cp.load(filepath)
+		icol += 1
+		filename = self.dapi_save.format(fov=fov, tag=tag, icol=icol)
+		filepath = os.path.join(self.output_folder, filename)
+		if not os.path.exists(filepath):
+			container[icol].compute()
+		else:
+			container.Xh_plus = cp.load(filepath)['Xh_plus']
+			container.Xh_minus = cp.load(filepath)['Xh_minus']
+		return container
+
 	def _worker(self):
 		"""Continuously read images and put them in the queue."""
 		for path in self.files:
 			if self.stop_event.is_set():
 				break
 			try:
-				im = read_im(path)
-				self.queue.put(im)  # Blocks if queue is full
+				container = self.containerize(path)
+				self.queue.put(container)
 			except Exception as e:
 				print(f"Warning: failed to read {path}: {e}")
 				#dummy = lambda : None
@@ -396,15 +399,25 @@ class ImageQueue:
 		"""Return the next block of images (same FOV)."""
 		block = self.block
 		first_item = self.queue.get()
+
 		if first_item is None:
-			raise StopIteration
+			if block:
+				self.block = Block()
+				self.queue.put(None)
+				return block
+			else:
+				raise StopIteration
 		
 		if hasattr(self, "background_range"):
 			self.block.background = first_item
 		else:
 			block.append(first_item)
-		ifov = None if first_item == False else get_ifov(first_item.path)
 
+		#ifov = None if first_item == False else get_ifov(first_item.path)
+		#iset = None if first_item == False else get_iset(first_item.path)
+		ifov = get_ifov(first_item.path) if first_item else first_item
+		iset = get_iset(first_item.path) if first_item else first_item
+		
 		# Keep consuming queue until FOV changes or None
 		while True:
 			item = self.queue.get()
@@ -412,8 +425,9 @@ class ImageQueue:
 				break
 			if item is None:
 				self.queue.put(None)
+				self.block = Block()
 				break
-			if get_ifov(item.path) != ifov:
+			if (get_ifov(item.path) != ifov) or (get_iset(item.path) != iset):
 				if hasattr(self, "background_range"):
 					self.block.background = item
 				else:
@@ -421,7 +435,8 @@ class ImageQueue:
 				break
 			block.append(item)
 		if hasattr(self, "background_range") and first_item == False:
-			block.clear()	
+			block.clear()
+		block.ifov = ifov
 		return block
 
 	'''
@@ -529,8 +544,8 @@ class ImageQueue:
 		self.stop_event.set()
 		self.thread.join()
 
-	def _is_done(self, path):
-		fov, tag = self.path_parts(path)
+	def _is_fitted(self, path):
+		fov, tag = path_parts(path)
 		for icol in range(self.shape[0] - 1):
 			filename = self.hyb_save.format(fov=fov, tag=tag, icol=icol)
 			filepath = os.path.join(self.output_folder, filename)
@@ -542,14 +557,8 @@ class ImageQueue:
 			return False
 		return True
 
-	def path_parts(self, path):
-		path_obj = Path(path)
-		fov = path_obj.stem  # The filename without extension
-		tag = path_obj.parent.name  # The parent directory name (which you seem to want)
-		return fov, tag
-
 	def save_hyb(self, path, icol, Xhf, attempt=1, max_attempts=3):
-		fov,tag = self.path_parts(path)
+		fov,tag = path_parts(path)
 		filename = self.hyb_save.format(fov=fov, tag=tag, icol=icol)
 		filepath = os.path.join(self.output_folder, filename)
 	
@@ -578,7 +587,7 @@ class ImageQueue:
 			xp._default_memory_pool.free_all_blocks()  # Free standard GPU memory pool
 
 	def save_dapi(self, path, icol, Xh_plus, Xh_minus, attempt=1, max_attempts=3):
-		fov, tag = self.path_parts(path)
+		fov, tag = path_parts(path)
 		filename = self.dapi_save.format(fov=fov, tag=tag, icol=icol)
 		filepath = os.path.join(self.output_folder, filename)
 	

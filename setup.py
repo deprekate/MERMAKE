@@ -60,7 +60,7 @@ def main():
 		packages=find_packages(),
 		include_package_data=True,
 		package_data={"mermake": ["*.cu"]},
-		install_requires=['zarr','numpy', cupy_package()],
+		install_requires=['dask','numpy', cupy_package()],
 		#ext_modules = [module],
 	)
 
