@@ -13,7 +13,7 @@ else:
 import concurrent.futures
 
 # put this first to make sure to capture the correct gpu
-os.environ["CUDA_VISIBLE_DEVICES"] = "3"  # Change "1" to the desired GPU ID
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # Change "1" to the desired GPU ID
 import cupy as cp
 #cp.cuda.Device(0).use() # The above export doesnt always work so force CuPy to use GPU 0
 import numpy as np
