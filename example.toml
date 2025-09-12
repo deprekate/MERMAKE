@@ -1,24 +1,22 @@
 [paths]
-codebook = '/home/katelyn/develop/MERMAKE/codebooks/codebook_code_color2__ExtraAaron_8_6_blank.csv' ### 
-psf_file = '/home/katelyn/develop/MERMAKE/psfs/psf_750_Scope3_final.npy'  ### Scope5 psf
+codebook = 'none' ### 
+psf_file = 'psfs/psf_750_Scope3_final.npy'  ### Scope5 psf
 #psf_file = '/home/katelyn/develop/MERMAKE/psfs/dic_psf_60X_cy5_Scope5.pkl'  ### Scope5 psf
-flat_field_tag = '/home/katelyn/develop/MERMAKE/flat_field/Scope3_'
-hyb_range = 'H1_AER_set1:H3_AER_set2'
-hyb_folders = [
-				#'/data/Tominersen_Human_05_09_2025',
-				'/data/07_22_2024__PFF_PTBP1',
-				#'blank'
-				]
-output_folder = '/home/katelyn/develop/MERMAKE/MERFISH_Analysis_AER'
+flat_field_tag = 'flat_field/Scope3_'
+hyb_range = 'H1_BICAN_set1:H4_BICAN_set1'
+hyb_folders = ['Tominersen_Human_05_09_2025']
+output_folder = 'MERFISH_Analysis_BICAN'
 redo = true
+#background_range = 'H0_background_set1:H0_background_set1'
 #---------------------------------------------------------------------------------------#
 #---------------------------------------------------------------------------------------#
 #           you probably dont have to change any of the settings below                  #
 #---------------------------------------------------------------------------------------#
 #---------------------------------------------------------------------------------------#
-fov_range = '1:40'
+fov_range = '1:10'
 hyb_save =  '{fov}--{tag}--col{icol}__Xhfits.npz'
 dapi_save = '{fov}--{tag}--dapiFeatures.npz'
+drift_save = 'drift_{fov}--_set{iset}.pkl'
 regex = '''([A-z]+)(\d+)_(.+)_set(\d+)(.*)''' #use triple quotes to avoid double escape
 
 [hybs]

@@ -5,6 +5,7 @@ import cupy as cp
 import numpy as np
 
 from . import blur
+from .fill import reflect
 
 def repeat_last(iterable):
 	it = iter(iterable)
@@ -96,6 +97,8 @@ class Deconvolver:
 	def tile_wise(self, image, flat_field=None, blur_radius=None, **kwargs):
 		xp = cp.get_array_module(image)
 		zpad = self.zpad
+		overlap = self.overlap
+		tile_size = self.tile_size
 		tile_pad = self.tile_pad
 		tile_fft = self.tile_fft
 		tile_res = self.tile_res
@@ -107,68 +110,79 @@ class Deconvolver:
 		tiles = self.tiled(image)
 		flats = cycle([(None,None,None)]) if flat_field is None else self.tiled(flat_field[np.newaxis])
 	
-		z = image.shape[0]
 		# the big loop
 		for (x,y,tile),(_,_,flat),psf_fft in zip(tiles, flats, psf_ffts):
-			# reflect padding along the z axis
-			tile_pad[	 : zpad,  :, :] = tile[zpad-1::-1, :, :]
-			tile_pad[ zpad:-zpad, :, :] = tile
-			# this will allow images with different z to not error
-			#tile_pad[ zpad:zpad+z, :, :] = tile
-			tile_pad[-zpad:		, :, :] = tile[-1:-zpad-1:-1, :, :]
-	
+			zdim,xdim,ydim = tile.shape
+			xstart = overlap if x == 0 else 0
+			ystart = overlap if y == 0 else 0
+			xend = xdim
+			yend = ydim
+			
+			tile_pad[:] = 0.0
+			tile_pad[ zpad:zpad+zdim, xstart:xstart+xdim, ystart:ystart+ydim] = tile      # fill
+		
 			# flat field correction
 			if flat_field is not None:
-				cp.divide(tile_pad[zpad:-zpad], flat, out=tile_pad[zpad:-zpad])
-			
+				mask = (slice(zpad,-zpad), slice(xstart,xstart+xdim), slice(ystart,ystart+ydim))
+				cp.divide(tile_pad[mask], flat, out=tile_pad[mask])
+
+			# x reflect at left and right
+			if x == 0:
+				reflect(tile_pad, overlap, mode='in', axis=1)
+				xend += overlap
+			elif xdim < tile_size + (2 * overlap):
+				reflect(tile_pad, xdim-1, mode='out', axis=1)
+				xend += overlap
+			# y reflect at top and bottom
+			if y == 0:
+				reflect(tile_pad, overlap, mode='in', axis=2)
+				yend += overlap
+			elif ydim < tile_size + (2 * overlap):
+				reflect(tile_pad, ydim-1, mode='out', axis=2)
+				yend += overlap
+			# z reflect down
+			reflect(tile_pad, zpad, mode='in', axis=0)
+			# z relfect up
+			reflect(tile_pad, zpad+zdim-1, mode='out', axis=0)
+			#tile_pad[:zpad, :, :] = tile_pad[zpad, :, :]
+			#tile_pad[-zpad:, :, :] = tile_pad[zpad+zdim-1, :, :]
+			#tile_pad[zpad - zdim:zpad, :, :] = tile_pad[zpad:zpad+zdim, :, :][::-1, :, :]
+			#tile_pad[zpad + zdim:zpad + zdim + zpad, :, :] = tile_pad[zdim:zpad+zdim, :, :][::-1, :, :]
+
 			# the fft convolution and deconvolution
 			tile_fft[:] = xp.fft.fftn(tile_pad)
 			xp.multiply(tile_fft, psf_fft, out=tile_fft)
-			tile_res[:] = xp.fft.ifftn(tile_fft)[zpad:-zpad,:,:].real
+			tile_res[:] = xp.fft.ifftn(tile_fft)[zpad:-zpad].real
 
 			# optional blur subtraction
 			if blur_radius is not None:
 				blur.box_1d(tile_res, blur_radius, axis=1, output=tile_buf)
 				blur.box_1d(tile_buf, blur_radius, axis=2, output=tile_tem)
 				xp.subtract(tile_res, tile_tem, out=tile_res)
-			yield x,y,tile_res,tile
+			
+			# flat field uncorrection - put tile_pad back so it matches the raw tile
+			if flat_field is not None:
+				mask = (slice(zpad,-zpad), slice(xstart,xstart+xdim), slice(ystart,ystart+ydim))
+				cp.multiply(tile_pad[mask], flat, out=tile_pad[mask])
+			
+			yield x,y,tile_res[:,:xend, :yend],tile_pad[zpad:-zpad, :xend, :yend]
 
 	def apply(self, image, flat_field=None, blur_radius=None, output=None, **kwargs):
 		xp = cp.get_array_module(image)
 		if output is None:
 			output = xp.empty_like(image, dtype=xp.float32)
 
+		overlap = self.overlap
 		sz, sx, sy = image.shape
 		# Create a CUDA stream for better synchronization
-		stream = cp.cuda.Stream(non_blocking=True)
-		with stream:
-			for x, y, tile, _ in self.tile_wise(image, flat_field=flat_field, blur_radius=blur_radius):
-				'''
-				# Pre-calculate dimensions only once outside of any memory operations
-				x_end = min(x + self.tile_size, self.sx)
-				y_end = min(y + self.tile_size, self.sy)
-				width = x_end - x
-				height = y_end - y
-
-				# Use direct slicing with pre-calculated dimensions
-				output[:, x:x_end, y:y_end] = tile[:, self.overlap:self.overlap+width, self.overlap:self.overlap+height]
-				'''
-				# Calculate how much of the output we can update with this tile
-				max_x = min(x + self.tile_size, sx)
-				max_y = min(y + self.tile_size, sy)
-				
-				# How much of the processed tile (after removing overlap) we can use
-				tile_usable_width = tile.shape[2] - 2*self.overlap  # Width in the tile
-				tile_usable_height = tile.shape[1] - 2*self.overlap  # Height in the tile
-				
-				# The final amount we can safely copy (limited by both output and tile)
-				width_to_copy = min(max_y - y, tile_usable_width)
-				height_to_copy = min(max_x - x, tile_usable_height)
-				
-				# Update the output with the usable part of the tile
-				output[:, x:x+height_to_copy, y:y+width_to_copy] = tile[:,self.overlap:self.overlap+height_to_copy,self.overlap:self.overlap+width_to_copy]
-								  
-		stream.synchronize()
+		#stream = cp.cuda.Stream(non_blocking=True)
+		#with stream:
+		for x, y, tile, _ in self.tile_wise(image, flat_field=flat_field, blur_radius=blur_radius):
+				zdim,xdim,ydim = tile.shape
+				xdim -= (2 * overlap)
+				ydim -= (2 * overlap)
+				output[:, x:x+xdim, y:y+ydim] = tile[:,overlap:-overlap, overlap:-overlap]
+		#stream.synchronize()
 		return output
 
 	def tiled(self, image):
@@ -177,14 +191,12 @@ class Deconvolver:
 		"""
 		xp = cp.get_array_module(image)
 		sz, sx, sy = image.shape
-		self.sz = sz
-		self.sx = sx
-		self.sy = sy
 		self.nx = int(xp.ceil(sx / self.tile_size))
 		self.ny = int(xp.ceil(sy / self.tile_size))
-	
-		for x in range(0, sx, self.tile_size):
-			for y in range(0, sy, self.tile_size):
+
+		tile_size = self.tile_size
+		for x in range(0, sx, tile_size):
+			for y in range(0, sy, tile_size):
 				# Compute bounds with overlap
 				x_start = max(x - self.overlap, 0)
 				y_start = max(y - self.overlap, 0)
@@ -193,24 +205,7 @@ class Deconvolver:
 	
 				# Extract tile region
 				tile = image[:, x_start:x_end, y_start:y_end]
-	
-				# Pad if the tile is near an edge
-				pad_left   = self.overlap - (x - x_start)
-				pad_right  = (x + self.tile_size + self.overlap) - x_end
-				pad_top	= self.overlap - (y - y_start)
-				pad_bottom = (y + self.tile_size + self.overlap) - y_end
-	
-				pad_width = (
-					(0, 0),  # no padding on Z
-					(pad_left, pad_right),
-					(pad_top, pad_bottom)
-				)
-				if any(p > 0 for p in (pad_left, pad_right, pad_top, pad_bottom)):
-					tile = xp.pad(tile, pad_width, mode='reflect')
-
 				yield x, y, tile
-
-
 
 	def untiled(self, image):
 		"""
@@ -257,8 +252,7 @@ class Deconvolver:
 
 		target_shape = xp.array([self.tile_height, self.tile_size, self.tile_size])
 		psf_shape = xp.array(psf.shape)
-	
-		psff = xp.zeros(target_shape, dtype=psf.dtype)  # Use same dtype for consistency
+		psff = xp.zeros(tuple(target_shape.tolist()), dtype=psf.dtype)  # Use same dtype for consistency
 	
 		# Compute start & end indices for both source (psf) and target (psff)
 		start_psff = xp.maximum(0, (target_shape - psf_shape) // 2)
@@ -277,7 +271,7 @@ class Deconvolver:
 
 		return psff
 
-def full_deconv(image, psfs, flat_field = None, tile_size=300, zpad = None, overlap = 89, beta = 0.001):
+def full_deconv(image, psfs, flat_field = None, tile_size=300, zpad = None, overlap = 1, beta = 0.001):
 	xp = cp.get_array_module(image)
 
 	shape = image.shape

@@ -78,7 +78,11 @@ def find_local_maxima(image, threshold=None, delta=1, delta_fit=0, raw=None, sig
 	
 	# Allocate output array for refined coordinates
 	output = cp.zeros((num_found, 8), dtype=cp.float32)
-	
+
+	# always cast the uint16 raw to float32
+	if raw.dtype != cp.float32:
+		raw = raw.astype(cp.float32)
+
 	# Call delta fit kernel
 	blocks = (num_found + threads - 1) // threads
 	delta_fit_cross_corr_kernel((blocks,), (threads,), 
