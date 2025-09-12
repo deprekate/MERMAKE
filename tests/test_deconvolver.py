@@ -200,11 +200,20 @@ class TestDeconvolverMethods:
 		overlap = deconv_instance.overlap
 		tile_size = deconv_instance.tile_size
 		for x, y, tile in deconv_instance.tiled(image):
+			zdim,xdim,ydim = tile.shape
+			xstart = 0 if x == 0 else overlap
+			ystart = 0 if y == 0 else overlap
+			xend = xdim if xdim < tile_size else tile_size
+			yend = ydim if ydim < tile_size else tile_size
 			# First tile should include overlap on right and bottom
 			if x == 0 and y == 0:
-				assert tile.shape == (20, 70, 70)  # 50 + 2 * 10 overlap
+				assert tile.shape == (20, 60, 60)  # 50 + 10 overlap
 			# Check that tile data matches original image
-			assert np.array_equal(tile[:,overlap:-overlap,overlap:-overlap], image[:, x:x+tile_size, y:y+tile_size]), f"x={x},y={y}"
+			#assert np.array_equal(tile[:,overlap:-overlap,overlap:-overlap], image[:, x:x+tile_size, y:y+tile_size]), f"x={x},y={y}"
+			sub = tile[:,xstart:xstart+xend, ystart:ystart+yend]
+			ref = image[:, x:x+tile_size, y:y+tile_size]
+			assert sub.shape == ref.shape
+			assert np.array_equal(sub, ref), f"x={x},y={y}"
 
 
 class TestDeconvolverProcessing:

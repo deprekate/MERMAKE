@@ -187,7 +187,7 @@ class Deconvolver:
 
 	def tiled(self, image):
 		"""
-		Yield tiles of the image with reflected padding, computed on-the-fly.
+		Yield tiles of the image do reflected padding later
 		"""
 		xp = cp.get_array_module(image)
 		sz, sx, sy = image.shape
