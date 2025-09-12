@@ -71,8 +71,7 @@ class Deconvolver:
 			laplacian_fft *= beta
 			psf_fft[z] += laplacian_fft
 			psf_fft[z] = psf_conj / psf_fft[z]
-		del laplacian_fft, psf_conj #, psf_stack
-		self.psf_stack = psf_stack
+		del laplacian_fft, psf_conj, psf_stack
 
 		self.psf_fft = psf_fft
 		
@@ -254,7 +253,6 @@ class Deconvolver:
 		target_shape = xp.array([self.tile_height, self.tile_size, self.tile_size])
 		psf_shape = xp.array(psf.shape)
 		psff = xp.zeros(tuple(target_shape.tolist()), dtype=psf.dtype)  # Use same dtype for consistency
-		psf /= psf.sum()  # Normalize
 	
 		# Compute start & end indices for both source (psf) and target (psff)
 		start_psff = xp.maximum(0, (target_shape - psf_shape) // 2)
@@ -267,10 +265,13 @@ class Deconvolver:
 		slices_psff = tuple(slice(int(s), int(e)) for s, e in zip(start_psff, end_psff))
 		slices_psf = tuple(slice(int(s), int(e)) for s, e in zip(start_psf, end_psf))
 		psff[slices_psff] = psf[slices_psf]
-	
+
+		# normalize at the end
+		psff /= psff.sum()
+
 		return psff
 
-def full_deconv(image, psfs, flat_field = None, tile_size=300, zpad = None, overlap = 89, beta = 0.001):
+def full_deconv(image, psfs, flat_field = None, tile_size=300, zpad = None, overlap = 1, beta = 0.001):
 	xp = cp.get_array_module(image)
 
 	shape = image.shape
