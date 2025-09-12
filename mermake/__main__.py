@@ -13,18 +13,21 @@ else:
 import concurrent.futures
 
 # put this first to make sure to capture the correct gpu
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # Change "1" to the desired GPU ID
+os.environ["CUDA_VISIBLE_DEVICES"] = "3"  # Change "1" to the desired GPU ID
 import cupy as cp
 #cp.cuda.Device(0).use() # The above export doesnt always work so force CuPy to use GPU 0
 import numpy as np
+import dask.array as da
 
 #sys.path.pop(0)
 from mermake.deconvolver import Deconvolver
 from mermake.maxima import find_local_maxima
 #from more.maxima import find_local_maxima
-from mermake.io import image_generator, load_flats
-from mermake.io import ImageQueue, read_cim, dict_to_namespace
+from mermake.io import load_flats
+from mermake.io import ImageQueue, dict_to_namespace
+#from mermake.align import Aligner 
 import mermake.blur as blur
+from mermake.align import drift, drift_save
 
 
 # Validator for the TOML file
@@ -91,15 +94,16 @@ class CustomArgumentParser(argparse.ArgumentParser):
 		super().error(message)
 
 def view_napari(queue, deconvolver, args ):
-	image = next(queue)
+	block = next(queue)
+	image = next(iter(block))
 	buffer = deconvolver.buffer
 	flats = deconvolver.flats
 	import napari
 	viewer = napari.Viewer()
 	color = ['red','green','blue', 'white']
-	ncol = queue.shape[0]
+	ncol = image.shape[0]
 	for icol in range(ncol-1):
-		chan = image[icol]
+		chan = cp.asarray(image[icol])
 		flat = flats[icol]
 		deconvolver.hybs.apply(chan, flat_field=flat, output=buffer, blur_radius=None)
 		deco = cp.asnumpy(buffer)
@@ -109,12 +113,11 @@ def view_napari(queue, deconvolver, args ):
 		# Stack 3D images: original, deco, norm
 		stacked = np.stack([cp.asnumpy(chan), deco, norm], axis=0)
 		viewer.add_image(stacked, name=f"channel {icol}", colormap=color[icol], blending='additive')
-
 		# Add corresponding points for this stack
 		points = cp.asnumpy(Xh[:, :3])
 		viewer.add_points(points, size=7, border_color=color[icol],face_color='transparent', opacity=0.6, name=f"maxima {icol}")
 	icol += 1
-	chan = image[icol]
+	chan = cp.asarray(image[icol])
 	flat = flats[icol]
 	deconvolver.dapi.apply(chan, flat_field=flat, output=buffer, blur_radius=None)
 	deco = cp.asnumpy(buffer)
@@ -158,7 +161,6 @@ def main():
 	# the save file executor to do the saving in parallel with computations
 	executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 
-	
 	message = 'Finding input image files.'
 	print_clean(message)
 	with ImageQueue(args) as queue:
@@ -169,6 +171,7 @@ def main():
 		sy = queue.shape[3]
 		# this is a buffer to use for copying into 
 		buffer = cp.empty(queue.shape[1:], dtype=cp.float32)	
+		chan = cp.empty(queue.shape[1:], dtype=cp.uint16)	
 	
 		flats = load_flats(shape = queue.shape, **vars(args.paths))
 
@@ -189,64 +192,96 @@ def main():
 		overlap = args.hybs.overlap
 		tile_size = args.hybs.tile_size
 
-		transfer_stream = cp.cuda.Stream(non_blocking=True)
-		compute_stream = cp.cuda.Stream(non_blocking=True)
 		message = 'Starting image processing.\n'
 		print_clean(message)
-		for image in queue:
-			print(image.path, flush=True)
-			gpu_channels = []
-			transfer_events = []
-			for icol in range(ncol):
-				with transfer_stream:
-					chan_gpu = cp.asarray(image[icol])
-					event = cp.cuda.Event()
-					event.record(transfer_stream)
-					gpu_channels.append(chan_gpu)
-					transfer_events.append(event)
-			for icol in range(ncol - 1):
-				chan = gpu_channels[icol]
-				event = transfer_events[icol]
+		for block in queue:
+			'''
+			if block.background:
+				icol = -1
+				chan.set(block.background[icol])
+				flat = flats[icol]
+				deconvolver.dapi.apply(chan, flat_field=flat, output=buffer, **vars(args.dapi))
+				# the dapi channel is further normalized by the stdev
+				std_val = float(cp.asnumpy(cp.linalg.norm(buffer.ravel()) / cp.sqrt(buffer.size)))
+				cp.divide(buffer, std_val, out=buffer)
+				Xh_plus = find_local_maxima(buffer, raw = chan, **vars(args.dapi) )
+				cp.multiply(buffer, -1, out=buffer)
+				Xh_minus = find_local_maxima(buffer, raw = chan, **vars(args.dapi) )
+				queue.save_dapi(block.background.path, icol, Xh_plus, Xh_minus)
 
-				# Wait for channel transfer before compute
-				compute_stream.wait_event(event)
-				with compute_stream:
-					# there is probably a better way to do the Xh stacking
-					Xhf = []
+				aligner = Aligner(Xh_plus[:,:3])
+			'''	
+			for image in block:
+				print('running on:', image.path, flush=True)
+				icol = -1
+				data = image[icol].data
+				if not isinstance(data, da.Array):
+					chan.set(data)
 					flat = flats[icol]
-					for x,y,tile,raw in deconvolver.hybs.tile_wise(chan, flat, **vars(args.hybs)):
-						Xh = find_local_maxima(tile, raw = raw, **vars(args.hybs))
-						keep = cp.all((Xh[:,1:3] >= overlap) & (Xh[:,1:3] < cp.array([tile.shape[1] - overlap, tile.shape[2] - overlap])), axis=-1)
-						Xh = Xh[keep]
-						Xh[:,1] += x - overlap
-						Xh[:,2] += y - overlap
-						# one more subset to get rid of xfits in the padded area beyond the original image size
-						keep = cp.all((Xh[:,1:3] >= 0) & (Xh[:,1:3] < cp.array([sx, sy])), axis=-1)
-						Xh = Xh[keep]
-						Xhf.append(Xh)
-					executor.submit(queue.save_hyb, image.path, icol, Xhf)
-					del chan, Xhf, Xh, keep
+					# Deconvolve in-place into the buffer
+					deconvolver.dapi.apply(chan, flat_field=flat, output=buffer, **vars(args.dapi))
+					# the dapi channel is further normalized by the stdev
+					std_val = float(cp.asnumpy(cp.linalg.norm(buffer.ravel()) / cp.sqrt(buffer.size)))
+					cp.divide(buffer, std_val, out=buffer)
+					Xh_plus = find_local_maxima(buffer, raw = chan, **vars(args.dapi) )
+					cp.multiply(buffer, -1, out=buffer)
+					Xh_minus = find_local_maxima(buffer, raw = chan, **vars(args.dapi) )
+					# save the data
+					executor.submit(queue.save_dapi, image.path, icol, Xh_plus, Xh_minus)
+			
+					if block.background:
+						slices_back, slices_chan = aligner.get_shifted_slices( Xh_plus[:,:3], chan.shape )
+			
+					image.Xh_plus = Xh_plus
+					image.Xh_minus = Xh_minus
+					del Xh_plus, Xh_minus
 
-			# Wait for channel transfer before compute
-			chan = gpu_channels[icol]
-			event = transfer_events[icol]
-			compute_stream.wait_event(event)
+					'''
+					#import napari
+					#viewer = napari.Viewer()
+					icol = 0
+					im_bk = block.background[icol]
+					im_sig = image[icol]
+					immed = cp.asnumpy(flat)
+					im_sig_ = (np.array(im_sig,dtype=np.float32)/immed)[slices_chan]
+					im_bk_ = (np.array(im_bk,dtype=np.float32)/immed)[slices_back]
+					fixed = im_sig_ - im_bk_
+					#viewer.add_image(im_bk_, name='background')
+					#viewer.add_image(im_sig_, name='signal')
+					deconvolver.buffer = buffer
+					deconvolver.flats = flats
+					view_napari(iter([fixed]), deconvolver, args)
+					#from mermake.deconvolver import full_deconv
+					#deconv = full_deconv(cp.asarray(fixed), psfs=psfs, flat_field = cp.asarray(immed), beta = 0.0001) 
+					#viewer.add_image(fixed, name ='difference')
+					#viewer.add_image(cp.asnumpy(deconv), name ='deconv')
+					napari.run()
+					os._exit(1)
+					'''
+				for icol in range(ncol - 1):
+					data = image[icol].data
+					if not isinstance(data, da.Array):
+						chan.set(data)
+						flat = flats[icol]
+						# there is probably a better way to do the Xh stacking
+						Xhf = []
+						for x,y,tile,raw in deconvolver.hybs.tile_wise(chan, flat, **vars(args.hybs)):
+							Xh = find_local_maxima(tile, raw = raw, **vars(args.hybs))
+							keep = cp.all((Xh[:,1:3] >= overlap) & (Xh[:,1:3] < cp.array([tile.shape[1] - overlap, tile.shape[2] - overlap])), axis=-1)
+							Xh = Xh[keep]
+							Xh[:,1] += x - overlap
+							Xh[:,2] += y - overlap
+							# one more subset to get rid of xfits in the padded area beyond the original image size
+							#keep = cp.all((Xh[:,1:3] >= 0) & (Xh[:,1:3] < cp.array([sx, sy])), axis=-1)
+							#Xh = Xh[keep]
+							Xhf.append(Xh)
+						executor.submit(queue.save_hyb, image.path, icol, Xhf)
+						del Xhf, Xh, keep
+				del image
 
-			# now do dapi
-			#chan = cp.asarray(image[-1])
-			flat = flats[-1]
-			# Deconvolve in-place into the buffer
-			deconvolver.dapi.apply(chan, flat_field=flat, output=buffer, **vars(args.dapi))
-			# the dapi channel is further normalized by the stdev
-			std_val = float(cp.asnumpy(cp.linalg.norm(buffer.ravel()) / cp.sqrt(buffer.size)))
-			cp.divide(buffer, std_val, out=buffer)
-			Xh_plus = find_local_maxima(buffer, raw = chan, **vars(args.dapi) )
-			cp.multiply(buffer, -1, out=buffer)
-			Xh_minus = find_local_maxima(buffer, raw = chan, **vars(args.dapi) )
-			# save the data
-			executor.submit(queue.save_dapi, image.path, icol, Xh_plus, Xh_minus)
-			#image.clear()
-			del chan, Xh_plus, Xh_minus, image, gpu_channels, chan_gpu, transfer_events
+			drifts = drift(block, **vars(args.paths))
+			executor.submit(drift_save, drifts)
+	
 
 if __name__ == "__main__":
 	main()
