@@ -13,6 +13,4 @@ build:
 	python3 -m twine upload dist/*
 
 test:
-	pytest tests/test_deconvolver.py -v
-testx:
-	pytest tests/test_deconvolver.py -v -x
+	pytest tests/ -v
