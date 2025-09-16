@@ -59,7 +59,7 @@ def main():
 		python_requires='>3.5.2',
 		packages=find_packages(),
 		include_package_data=True,
-		package_data={"mermake": ["*.cu"]},
+		package_data={"mermake": ["VERSION", "*.cu"]},
 		install_requires=['dask','numpy', cupy_package()],
 		#ext_modules = [module],
 	)
