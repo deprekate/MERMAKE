@@ -279,8 +279,9 @@ def main():
 						del Xhf, Xh, keep
 				del image
 
-			drifts = drift(block, **vars(args.paths))
-			executor.submit(drift_save, drifts)
+			drifts, filepath = drift(block, **vars(args.paths))
+			executor.submit(drift_save, drifts, filepath )
+			del drifts, filepath
 	
 
 if __name__ == "__main__":

@@ -60,7 +60,7 @@ def test_box_and_box_2d_match_numpy(axes, size):
 		cp.testing.assert_allclose(got2d, got, rtol=1e-6)
 
 def test_box_1d():
-	arr = cp.zeros([3,3,3])
+	arr = cp.zeros((3, 3, 3), dtype=cp.float32)
 	arr[0,0,0] = 1
 	want = cp.array([[[0.5       , 0.        , 0.        ],
 					  [0.        , 0.        , 0.        ],
@@ -98,6 +98,13 @@ def test_box_1d():
 					  [0.        , 0.        , 0.        ]]], dtype=cp.float32)
 	got = blur.box_1d(arr, 2, axis=2)
 	cp.testing.assert_allclose(want, got, rtol=1e-6)
+
+def test_inplace():
+	arr = cp.zeros((3, 3, 3), dtype=cp.float32)
+	arr[1,1] = 1
+	with pytest.raises(ValueError):
+		blur.box_1d(arr, 2, axis=0, out = arr)  # mismatch size/axes
+	
 
 def test_box_invalid_inputs():
 	arr = cp.ones((3, 3, 3), dtype=cp.float32)

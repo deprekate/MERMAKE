@@ -128,22 +128,22 @@ class Deconvolver:
 
 			# x reflect at left and right
 			if x == 0:
-				reflect(tile_pad, overlap, mode='in', axis=1)
+				reflect(tile_pad, overlap, mode='in', axis=1, out=tile_pad)
 				xend += overlap
 			elif xdim < tile_size + (2 * overlap):
-				reflect(tile_pad, xdim-1, mode='out', axis=1)
+				reflect(tile_pad, xdim-1, mode='out', axis=1, out=tile_pad)
 				xend += overlap
 			# y reflect at top and bottom
 			if y == 0:
-				reflect(tile_pad, overlap, mode='in', axis=2)
+				reflect(tile_pad, overlap, mode='in', axis=2, out=tile_pad)
 				yend += overlap
 			elif ydim < tile_size + (2 * overlap):
-				reflect(tile_pad, ydim-1, mode='out', axis=2)
+				reflect(tile_pad, ydim-1, mode='out', axis=2, out=tile_pad)
 				yend += overlap
 			# z reflect down
-			reflect(tile_pad, zpad, mode='in', axis=0)
+			reflect(tile_pad, zpad, mode='in', axis=0, out=tile_pad)
 			# z relfect up
-			reflect(tile_pad, zpad+zdim-1, mode='out', axis=0)
+			reflect(tile_pad, zpad+zdim-1, mode='out', axis=0, out=tile_pad)
 			#tile_pad[:zpad, :, :] = tile_pad[zpad, :, :]
 			#tile_pad[-zpad:, :, :] = tile_pad[zpad+zdim-1, :, :]
 			#tile_pad[zpad - zdim:zpad, :, :] = tile_pad[zpad:zpad+zdim, :, :][::-1, :, :]
@@ -156,8 +156,8 @@ class Deconvolver:
 
 			# optional blur subtraction
 			if blur_radius is not None:
-				blur.box_1d(tile_res, blur_radius, axis=1, output=tile_buf)
-				blur.box_1d(tile_buf, blur_radius, axis=2, output=tile_tem)
+				blur.box_1d(tile_res, blur_radius, axis=1, out=tile_buf)
+				blur.box_1d(tile_buf, blur_radius, axis=2, out=tile_tem)
 				xp.subtract(tile_res, tile_tem, out=tile_res)
 			
 			# flat field uncorrection - put tile_pad back so it matches the raw tile
