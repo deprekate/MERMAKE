@@ -12,23 +12,10 @@ else:
 	import tomli as tomllib  # Backport for older Python versions
 import concurrent.futures
 
-# put this first to make sure to capture the correct gpu
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # Change "1" to the desired GPU ID
-import cupy as cp
-#cp.cuda.Device(0).use() # The above export doesnt always work so force CuPy to use GPU 0
 import numpy as np
 import dask.array as da
 
 #sys.path.pop(0)
-from mermake.deconvolver import Deconvolver
-from mermake.maxima import find_local_maxima
-#from more.maxima import find_local_maxima
-from mermake.io import load_flats
-from mermake.io import ImageQueue, dict_to_namespace
-#from mermake.align import Aligner 
-import mermake.blur as blur
-from mermake.align import drift, drift_save
-
 
 # Validator for the TOML file
 def is_valid_file(path):
@@ -149,8 +136,25 @@ def main():
 	#parser = argparse.ArgumentParser(description='', formatter_class=argparse.RawTextHelpFormatter, usage=usage)
 	parser = CustomArgumentParser(description='',formatter_class=argparse.RawTextHelpFormatter,usage=usage)
 	parser.add_argument('settings', type=is_valid_file, help='settings file')
+	parser.add_argument('-g', '--gpu', type=int, default=0, help="The gpu to use [0]")
 	parser.add_argument('-c', '--check', action="store_true", help="Check a single zarr")
 	args = parser.parse_args()
+
+	# put this here to make sure to capture the correct gpu
+	os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
+	import cupy as cp
+	#cp.cuda.Device(0).use() # The above export doesnt always work so force CuPy to use GPU 0
+	from mermake.deconvolver import Deconvolver
+	from mermake.maxima import find_local_maxima
+	from mermake.io import load_flats
+	from mermake.io import ImageQueue, dict_to_namespace
+	#from mermake.io import dict_to_namespace
+	#from mermake.image_queue import ImageQueue
+
+	#from mermake.align import Aligner 
+	import mermake.blur as blur
+	from mermake.align import drift, drift_save
+
 	# Convert settings to namespace and attach each top-level section to args
 	for key, value in vars(dict_to_namespace(args.settings)).items():
 		setattr(args, key, value)
