@@ -14,6 +14,9 @@ import concurrent.futures
 
 import numpy as np
 import dask.array as da
+import faulthandler, signal
+faulthandler.register(signal.SIGUSR1)
+
 
 #sys.path.pop(0)
 
@@ -285,6 +288,11 @@ def main():
 
 			drifts, filepath = drift(block, **vars(args.paths))
 			executor.submit(drift_save, drifts, filepath )
+			result = drift(block, **vars(args.paths))
+			if result:
+				data, filepath = result
+				executor.submit(drift_save, data, filepath)
+
 			del drifts, filepath
 	
 

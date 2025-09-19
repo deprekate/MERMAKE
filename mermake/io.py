@@ -330,7 +330,7 @@ class ImageQueue:
 				interlaced.extend(background[key])  # put background first
 			hsorted = self.hsorted(matches[key])
 			interlaced.extend(hsorted)			    # then all matches for that iset,ifov
-		
+
 		self.files = iter(interlaced)
 
 		self.block = Block()
