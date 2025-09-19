@@ -81,6 +81,13 @@ class CustomArgumentParser(argparse.ArgumentParser):
 		super().error(message)
 
 def view_napari(queue, deconvolver, args ):
+	import cupy as cp
+	#cp.cuda.Device(0).use() # The above export doesnt always work so force CuPy to use GPU 0
+	from mermake.deconvolver import Deconvolver
+	from mermake.maxima import find_local_maxima
+	from mermake.io import load_flats
+	from mermake.io import ImageQueue, dict_to_namespace
+
 	block = next(queue)
 	image = next(iter(block))
 	buffer = deconvolver.buffer
@@ -88,9 +95,9 @@ def view_napari(queue, deconvolver, args ):
 	import napari
 	viewer = napari.Viewer()
 	color = ['red','green','blue', 'white']
-	ncol = image.shape[0]
+	ncol = queue.shape[0]
 	for icol in range(ncol-1):
-		chan = cp.asarray(image[icol])
+		chan = cp.asarray(image[icol].compute())
 		flat = flats[icol]
 		deconvolver.hybs.apply(chan, flat_field=flat, output=buffer, blur_radius=None)
 		deco = cp.asnumpy(buffer)
@@ -104,7 +111,7 @@ def view_napari(queue, deconvolver, args ):
 		points = cp.asnumpy(Xh[:, :3])
 		viewer.add_points(points, size=7, border_color=color[icol],face_color='transparent', opacity=0.6, name=f"maxima {icol}")
 	icol += 1
-	chan = cp.asarray(image[icol])
+	chan = cp.asarray(image[icol].compute())
 	flat = flats[icol]
 	deconvolver.dapi.apply(chan, flat_field=flat, output=buffer, blur_radius=None)
 	deco = cp.asnumpy(buffer)
@@ -282,7 +289,7 @@ def main():
 						executor.submit(queue.save_hyb, image.path, icol, Xhf)
 						del Xhf, Xh, keep
 				del image
-
+			'''
 			drifts, filepath = drift(block, **vars(args.paths))
 			executor.submit(drift_save, drifts, filepath )
 			result = drift(block, **vars(args.paths))
@@ -291,7 +298,7 @@ def main():
 				executor.submit(drift_save, data, filepath)
 
 			del drifts, filepath
-	
+			'''
 
 if __name__ == "__main__":
 	main()
