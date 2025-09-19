@@ -30,10 +30,9 @@ def _check_cuda():
 
 # Run the check at import time
 _check_cuda()
-	
+
 
 # ---------------- Version ----------------
-
 try:
 	# Try to get version from installed package metadata
 	__version__ = version("mermake")

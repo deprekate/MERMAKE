@@ -7,6 +7,12 @@ To install `MERMAKE`,
 python3 -m pip install mermake
 ```
 
+## ❗The newest version of mermake (>= 0.0.61) does drift but requires the nightly release of cupy available via:
+ 
+```
+pip install --pre cupy-cuda12x==14.0.0a1 -f https://pip.cupy.dev/pre
+```
+
 ## ⚠️ GPU Requirements & CUDA Toolkit
 
 MERMAKE relies on **CuPy** for GPU-accelerated image processing. To run MERMAKE successfully, you must have:
@@ -59,6 +65,7 @@ output_folder = "output"
 
 hyb_save =  '{fov}--{tag}--col{icol}__Xhfits.npz'
 dapi_save = '{fov}--{tag}--dapiFeatures.npz'
+drift_save = 'drift_{fov}--_set{iset}.pkl'
 regex = '''([A-z]+)(\d+)_([^_]+)_set(\d+)(.*)''' #use triple quotes to avoid double escape
 
 [hybs]
