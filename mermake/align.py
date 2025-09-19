@@ -10,35 +10,46 @@ from cupyx.scipy.spatial import KDTree
 #from scipy.spatial import KDTree
 
 class Aligner:
-	def __init__(self, X_ref, resc=5, pad=10, th=None):
+	def __init__(self, X_ref, resc=5, trim=10, th=None):
 		self.xp = cp.get_array_module(X_ref)
 		self.resc = resc
-		self.pad = pad
+		self.trim = trim
 		self.th = th
 		
 		# do thresholding of the maximas
 		if th:
 			X_ref = self.threshold(X_ref)
-		
-		self.X_ref = X_ref
+
+		# unlike scipy the cupy KDTree crashes if given no points, so catch it here
+		if X_ref.size == 0:
+			raise ValueError(
+				"No points left after thresholding; cannot build KDTree. "
+				"Check your data and/or threshold value."
+			)
+
+		self.X_ref = X_ref[:,:3]
 
 		# Build KDTree once
-		self.tree = KDTree(X_ref)
+		self.tree = KDTree(self.X_ref)
 
 		# Precompute reference image for FFT correlation
-		self.im_ref, self.Xm_ref = self.get_im_from_Xh(X_ref, resc, pad)
+		self.im_ref, self.Xm_ref = self.get_im_from_Xh(self.X_ref)
 
-	def get_im_from_Xh(self, Xh, resc=None, pad=None):
+	def get_im_from_Xh(self, Xh):
 		xp = self.xp
-		resc = resc or self.resc
-		pad = pad or self.pad
+		resc = self.resc
+		trim = self.trim
 
-		X = xp.round(Xh[:, :3] / resc).astype(xp.int32)
+		X = xp.round(Xh / resc).astype(xp.int32)
 		Xm = xp.min(X, axis=0)
 		XM = xp.max(X, axis=0)
-		n = xp.asarray([0, pad, pad], dtype=xp.int32)
+		n = xp.asarray([0, trim, trim], dtype=xp.int32)
 		keep = xp.all((X <= (XM - n)) & (X >= (Xm + n)), axis=-1)
 		X = X[keep]
+		# if trim is too extreme gracefully exit
+		if X.shape[0] == 0:
+			return xp.zeros((1, 1, 1), dtype=xp.float32), xp.array([0, 0, 0], dtype=xp.int32)
+
 		Xm = xp.array([0, 0, 0], dtype=xp.int32)
 		sz = xp.max(X, axis=0) + 1
 		imf = xp.zeros(sz.tolist(), dtype=xp.float32)
@@ -56,10 +67,13 @@ class Aligner:
 			keep = ds < dist_th
 			X_ref_ = self.X_ref[inds[keep]]
 			X_ = X[keep]
+			if X_.shape[0] == 0:
+				# no points kept, skip update
+				continue
 			tzxy = xp.mean(X_ - X_ref_, axis=0)
-			Npts = xp.sum(keep)
+		Npts = int(xp.sum(keep))
 		return tzxy, Npts
-	
+
 	def get_shifted_slices(self, X, shape):
 		"""Compute slices for signal and background images given integer shift."""
 		slices_sig = []
@@ -84,8 +98,10 @@ class Aligner:
 		if self.threshold:
 			X = self.threshold(X)
 
+		X = X[:,:3]
+
 		# Image for FFT correlation
-		im, Xm = self.get_im_from_Xh(X, resc=self.resc, pad=self.pad)
+		im, Xm = self.get_im_from_Xh(X)
 
 		# Pure-CuPy FFT correlation
 		im_cor = fftconvolve(im, self.im_ref[::-1, ::-1, ::-1])
@@ -103,24 +119,27 @@ class Aligner:
 
 
 	def threshold(self, X):
+		xp = cp.get_array_module(X)
 		th = self.th
+		dim = X.shape[1]
 		if X.size:
 			X = X[X[:,-1]>th]
 			if X.size:
 				return X
-		return xp.zeros(3), 0
+		return xp.zeros([0,dim])
 
 class DualAligner:
 	def __init__(self, ref, th=None):
 		self.xp = cp.get_array_module(ref)
 		self.plus = Aligner(ref.Xh_plus[:,:3], th = th)
 		self.minus = Aligner(ref.Xh_minus[:,:3], th = th)
+		self.th = th
 	
 	def get_best_translation_pointsV2(self, obj):
 		xp = self.xp
 
-		Xh_plus = obj.Xh_plus[:,:3]
-		Xh_minus = obj.Xh_minus[:,:3]
+		Xh_plus = obj.Xh_plus
+		Xh_minus = obj.Xh_minus
 		
 		tzxy_plus,N_plus = self.plus.get_best_translation_points(Xh_plus, return_counts = True) 
 		tzxy_minus,N_minus = self.minus.get_best_translation_points(Xh_minus, return_counts = True) 
@@ -156,5 +175,6 @@ def drift(block, **kwargs):
 			drift = dual.get_best_translation_pointsV2(image)
 			drifts.append(drift)
 			files.append(os.path.dirname(image.path))
-		pickle.dump([drifts, files, fov, ref.path], open(filepath,'wb'))
+		return [drifts, files, fov, ref.path], filepath
+		#pickle.dump([drifts, files, fov, ref.path], open(filepath,'wb'))
 

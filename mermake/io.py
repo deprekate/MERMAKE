@@ -137,7 +137,8 @@ def get_ih(file_path):
 	m = re.search(r'\d+', basename)  # first contiguous digits
 	if m:
 		return int(m.group())
-	raise ValueError(f"No number found in {basename}")
+	return 10**100
+	#raise ValueError(f"No number found in {basename}")
 
 def get_ifov(file_path):
 	"""Extract ifov from filename - finds last digits before .zarr"""
@@ -307,6 +308,7 @@ class ImageQueue:
 			self.background = True
 
 		# Peek at first image to set shape/dtype
+		first_image = None
 		for path in chain.from_iterable(matches.values()):
 			try:
 				first_image = read_im(path)
@@ -327,8 +329,8 @@ class ImageQueue:
 			if background and key in background:
 				interlaced.extend(background[key])  # put background first
 			hsorted = self.hsorted(matches[key])
-			interlaced.extend(hsorted)			# then all matches for that iset,ifov
-		
+			interlaced.extend(hsorted)			    # then all matches for that iset,ifov
+
 		self.files = iter(interlaced)
 
 		self.block = Block()
@@ -609,39 +611,6 @@ class ImageQueue:
 		if xp == cp:
 			xp._default_memory_pool.free_all_blocks()
 
-# Debugging wrapper for your main processing loop
-def debug_processing_loop(queue):
-	"""Wrapper to add debugging around your processing loop"""
-	logger.info("Starting processing loop")
-	block_count = 0
-	
-	try:
-		for block in queue:
-			block_count += 1
-			logger.info(f"Processing block {block_count} with {len(block)} images")
-			
-			for i, image in enumerate(block):
-				logger.debug(f"Processing image {i+1}/{len(block)} in block {block_count}")
-				
-				# Time the GPU operations
-				start_time = time.time()
-				cim = cp.asarray(image)  # This might be where it stalls
-				asarray_time = time.time() - start_time
-				logger.debug(f"cp.asarray took {asarray_time:.3f}s")
-				
-				start_time = time.time()
-				gpu_compute(cim)  # Or this might be where it stalls
-				compute_time = time.time() - start_time
-				logger.debug(f"gpu_compute took {compute_time:.3f}s")
-				
-			logger.info(f"Completed block {block_count}")
-			
-	except Exception as e:
-		logger.error(f"Error in processing loop at block {block_count}: {e}", exc_info=True)
-	logger.info(f"Processing loop completed, processed {block_count} blocks")
-
-
-from .utils import *
 def read_xml(path):
 	# Open and parse the XML file
 	tree = None
@@ -652,45 +621,6 @@ def read_xml(path):
 def get_xml_field(file, field):
 	xml = read_xml(file)
 	return xml.find(f".//{field}").text
-def set_data(args):
-	from wcmatch import glob as wc
-	from natsort import natsorted
-	pattern = args.paths.hyb_range
-	batch = dict()
-	files = list()
-	# parse hybrid folders
-	files = find_files(**vars(args.paths))
-	for file in files:
-		sset = re.search('_set[0-9]*', file).group()
-		hyb = os.path.basename(os.path.dirname(file))
-		#hyb = re.search(pattern, file).group()
-		if sset and hyb:
-			batch.setdefault(sset, {}).setdefault(os.path.basename(file), {})[hyb] = {'zarr' : file}
-	# parse xml files
-	points = list()
-	for sset in sorted(batch):
-		for fov in sorted(batch[sset]):
-			point = list()
-			for hyb,dic in natsorted(batch[sset][fov].items()):
-				path = dic['zarr']
-				#file = glob.glob(os.path.join(dirname,'*' + basename + '.xml'))[0]
-				file = path.replace('zarr','xml')
-				point.append(list(map(float, get_xml_field(file, 'stage_position').split(','))))
-			mean = np.mean(np.array(point), axis=0)
-			batch[sset][fov]['stage_position'] = mean
-			points.append(mean)
-	points = np.array(points)
-	mins = np.min(points, axis=0)
-	step = estimate_step_size(points)
-	#coords = points_to_coords(points)
-	for sset in sorted(batch):
-		for i,fov in enumerate(sorted(batch[sset])):
-			point = batch[sset][fov]['stage_position']
-			point -= mins
-			batch[sset][fov]['grid_position'] = np.round(point / step).astype(int)
-	args.batch = batch
-	#counts = Counter(re.search(pattern, file).group().split('_set')[0] for file in files if re.search(pattern, file))
-	#hybrid_count = {key: counts[key] for key in natsorted(counts)}
 
 def dict_to_namespace(d):
 	"""Recursively convert dictionary into SimpleNamespace."""

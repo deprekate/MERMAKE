@@ -12,7 +12,7 @@ box_1d_kernel = cp.RawKernel(kernel_code, "box_1d")
 #optimized_box_1d_kernel = cp.RawKernel(kernel_code, "optimized_box_1d")
 #box_plane_kernel = cp.RawKernel(kernel_code, "box_plane")
 
-def box(image, size, axes=None, output=None, temp=None):
+def box(image, size, axes=None, out=None, temp=None):
 	"""
 	Apply separable box blur on 2D or 3D cupy arrays.
 
@@ -32,7 +32,7 @@ def box(image, size, axes=None, output=None, temp=None):
 		Must be same shape and dtype as input.
 	temp : cupy.ndarray, optional
 		Temporary buffer. If None, one is created.
-	output : cupy.ndarray, optional
+	out : cupy.ndarray, optional
 		Output array. If None, a new one is created.
 
 	Returns
@@ -70,11 +70,11 @@ def box(image, size, axes=None, output=None, temp=None):
 
 	if len(axes) == 0:
 		# No axes to blur, just copy
-		if output is None:
+		if out is None:
 			return cp.copy(image)
 		else:
-			cp.copyto(output, image)
-			return output
+			cp.copyto(out, image)
+			return out
 
 	# Handle size parameter
 	if isinstance(size, int):
@@ -87,14 +87,14 @@ def box(image, size, axes=None, output=None, temp=None):
 		raise TypeError("size must be an int, tuple, or list of ints")
 
 	# Create output if necessary
-	if output is None:
-		output = cp.empty_like(image)
+	if out is None:
+		out = cp.empty_like(image)
 
 	# If only one axis, do single blur
 	if len(axes) == 1:
 		axis = axes[0]
-		box_1d(image, sizes[axis], axis=axis, output=output)
-		return output
+		box_1d(image, sizes[axis], axis=axis, out=out)
+		return out
 
 	# For multiple axes, we need exactly one temporary buffer
 	# (can't avoid this due to CUDA kernel race condition constraints)
@@ -111,25 +111,25 @@ def box(image, size, axes=None, output=None, temp=None):
 		if temp.shape != image.shape or temp.dtype != image.dtype:
 			raise ValueError("temp buffer must have same shape and dtype as input")
 
-	# First blur: image -> output
-	box_1d(image, sizes[axes[0]], axis=axes[0], output=output)
+	# First blur: image -> out
+	box_1d(image, sizes[axes[0]], axis=axes[0], out=out)
 
 	# Remaining blurs alternate between output and temp
 	for i in range(1, len(axes)):
 		axis = axes[i]
 		if i % 2 == 1:  # Odd iterations: output -> temp
-			box_1d(output, sizes[axis], axis=axis, output=temp)
+			box_1d(out, sizes[axis], axis=axis, out=temp)
 		else:  # Even iterations: temp -> output
-			box_1d(temp, sizes[axis], axis=axis, output=output)
+			box_1d(temp, sizes[axis], axis=axis, out=out)
 
 	# If we ended on temp, copy back to output
 	if len(axes) % 2 == 0:  # Even number of axes means we ended on temp
-		cp.copyto(output, temp)
+		cp.copyto(out, temp)
 
-	return output
+	return out
 
 
-def box_2d(image, size, axes=(-2, -1), output=None):
+def box_2d(image, size, axes=(-2, -1), out=None):
 	"""
 	Convenience function for 2D blur on specified axes.
 
@@ -141,7 +141,7 @@ def box_2d(image, size, axes=(-2, -1), output=None):
 		Blur size for the two axes.
 	axes : tuple of 2 ints, default (-2, -1)
 		Which two axes to blur.
-	output : cupy.ndarray, optional
+	out : cupy.ndarray, optional
 		Output array. If None, a new one is created.
 
 	Returns
@@ -152,16 +152,17 @@ def box_2d(image, size, axes=(-2, -1), output=None):
 	if len(axes) != 2:
 		raise ValueError("axes must contain exactly 2 elements for 2D blur")
 
-	return box(image, size, axes=axes, output=output)
+	return box(image, size, axes=axes, out=out)
 
-def box_1d(image, size, axis=0, output=None):
-	if image.dtype != cp.float32:
-		image = image.astype(cp.float32)
-	if output is None:
-		output = cp.empty_like(image)
+def box_1d(image, size, axis=0, out=None):
+	assert image.dtype == cp.float32, "Input must be float32"
+	if out is None:
+		out = cp.empty_like(image)
+	assert out.dtype == cp.float32, "Output must be float32"
 
 	# Prevent in-place operations that cause race conditions
-	assert output is not image, "In-place operation not supported - input and output must be different"
+	if cp.shares_memory(image, out):
+		raise ValueError("In-place operation not supported - input and output must be different")
 
 	if axis < 0:
 		axis = image.ndim - 1
@@ -183,8 +184,8 @@ def box_1d(image, size, axis=0, output=None):
 	threads_per_block = 256
 	blocks = (size_z * size_x * size_y + threads_per_block - 1) // threads_per_block
 	box_1d_kernel((blocks,), (threads_per_block,),
-				  (image, output, size_z, size_x, size_y, delta, axis))
-	return output
+				  (image, out, size_z, size_x, size_y, delta, axis))
+	return out
 
 
 
