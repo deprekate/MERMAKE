@@ -1,10 +1,12 @@
 import cupy as cp
 
 
+import cupy as cp
+
 reflect_kernel = cp.RawKernel(r'''
 extern "C" __global__
-void mirror(float* arr, const int ndim, const long* shape,
-			const long* strides, const int axis, const int i, const int mode) {
+void mirror(float* arr, const int ndim, const long long* shape,
+			const long long* strides, const int axis, const int i, const int mode) {
 	long idx = blockDim.x * blockIdx.x + threadIdx.x;
 	long size = 1;
 	for (int d=0; d<ndim; d++) size *= shape[d];
@@ -105,10 +107,8 @@ def reflect(arr: cp.ndarray, i: int, axis: int=0, mode: str="out", out: cp.ndarr
 		raise ValueError("mode must be 'out' or 'in'")
 	
 	reflect_kernel((blocks,), (threads,),
-				   (result, result.ndim, shape, strides, axis, i, mode_flag))
+				   (result, result.ndim, shape.data.ptr, strides.data.ptr, axis, i, mode_flag))
 	return result
-
-
 
 repeat_kernel = cp.RawKernel(r'''
 extern "C" __global__
