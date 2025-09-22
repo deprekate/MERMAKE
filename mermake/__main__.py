@@ -289,16 +289,12 @@ def main():
 						executor.submit(queue.save_hyb, image.path, icol, Xhf)
 						del Xhf, Xh, keep
 				del image
-			'''
-			drifts, filepath = drift(block, **vars(args.paths))
-			executor.submit(drift_save, drifts, filepath )
+			
 			result = drift(block, **vars(args.paths))
 			if result:
-				data, filepath = result
-				executor.submit(drift_save, data, filepath)
-
-			del drifts, filepath
-			'''
+				drifts, filepath = result
+				executor.submit(drift_save, drifts, filepath)
+				del drifts, filepath
 
 if __name__ == "__main__":
 	main()
