@@ -10,6 +10,8 @@ except ImportError:
 	import numpy as cp
 	CUPY_AVAILABLE = False
 
+from mermake.io import read_im
+
 from mermake.deconvolver import (
 	laplacian_3d, 
 	batch_laplacian_fft, 
@@ -76,13 +78,13 @@ class TestDeconvolverInitialization:
 	@pytest.fixture
 	def sample_image_shape(self):
 		"""Sample image shape for testing."""
-		return (None, 20, 100, 100)  # batch, z, x, y
+		return (20, 100, 100)  # batch, z, x, y
 	
 	def test_deconvolver_init_single_psf(self, sample_psf, sample_image_shape):
 		"""Test Deconvolver initialization with single PSF."""
 		deconv = Deconvolver(
 			psfs=sample_psf,
-			image_shape=sample_image_shape,
+			channel_shape=sample_image_shape,
 			tile_size=50,
 			zpad=5,
 			overlap=10,
@@ -104,7 +106,7 @@ class TestDeconvolverInitialization:
 		
 		deconv = Deconvolver(
 			psfs=psfs_dict,
-			image_shape=sample_image_shape,
+			channel_shape=sample_image_shape,
 			tile_size=50,
 			overlap=10,
 			beta=0.001
@@ -120,15 +122,15 @@ class TestDeconvolverInitialization:
 		
 		deconv = Deconvolver(
 			psfs=sample_psf,
-			image_shape=sample_image_shape,
+			channel_shape=sample_image_shape,
 			tile_size=tile_size,
 			zpad=zpad,
 			overlap=overlap
 		)
 		
 		expected_tile_shape = (tile_size + 2*overlap, tile_size + 2*overlap)
-		expected_pad_shape = (2*zpad + sample_image_shape[1], *expected_tile_shape)
-		expected_res_shape = (sample_image_shape[1], *expected_tile_shape)
+		expected_pad_shape = (2*zpad + sample_image_shape[0], *expected_tile_shape)
+		expected_res_shape = (sample_image_shape[0], *expected_tile_shape)
 		
 		assert deconv.tile_pad.shape == expected_pad_shape
 		assert deconv.tile_res.shape == expected_res_shape
@@ -142,11 +144,11 @@ class TestDeconvolverMethods:
 		"""Create a Deconvolver instance for testing."""
 		psf = np.zeros((10, 10, 10))
 		psf[5, 5, 5] = 1.0
-		image_shape = (None, 20, 100, 100)
+		channel_shape = (20, 100, 100)
 		
 		return Deconvolver(
 			psfs=psf,
-			image_shape=image_shape,
+			channel_shape=channel_shape,
 			tile_size=50,
 			zpad=5,
 			overlap=10,
@@ -235,11 +237,10 @@ class TestDeconvolverProcessing:
 	def test_apply_basic(self, simple_test_data):
 		"""Test basic apply functionality."""
 		image, psf = simple_test_data
-		image_shape = (None, *image.shape)
 		
 		deconv = Deconvolver(
 			psfs=psf,
-			image_shape=image_shape,
+			channel_shape=image.shape,
 			tile_size=30,
 			overlap=5,
 			zpad=2,
@@ -256,11 +257,10 @@ class TestDeconvolverProcessing:
 	def test_apply_with_blur_subtraction(self, simple_test_data, blur_radius):
 		"""Test apply with different blur subtraction settings."""
 		image, psf = simple_test_data
-		image_shape = (None, *image.shape)
 		
 		deconv = Deconvolver(
 			psfs=psf,
-			image_shape=image_shape,
+			channel_shape=image.shape,
 			tile_size=30,
 			overlap=5,
 			zpad=2
@@ -278,11 +278,10 @@ class TestDeconvolverProcessing:
 		flat_field = cp.ones(( 50, 50))
 		flat_field[:, :] *= cp.linspace(0.8, 1.2, 50)[:, None]
 		
-		image_shape = (None, *image.shape)
 		
 		deconv = Deconvolver(
 			psfs=psf,
-			image_shape=image_shape,
+			channel_shape=image.shape,
 			tile_size=30,
 			overlap=5,
 			zpad=2
@@ -303,11 +302,10 @@ class TestDeconvolverEdgeCases:
 		psf = np.zeros((5, 5, 5))
 		psf[2, 2, 2] = 1.0
 		
-		image_shape = (None, *image.shape)
 		
 		deconv = Deconvolver(
 			psfs=psf,
-			image_shape=image_shape,
+			channel_shape=image.shape,
 			tile_size=15,  # Smaller than image
 			overlap=2,
 			zpad=1
@@ -322,11 +320,10 @@ class TestDeconvolverEdgeCases:
 		psf = np.zeros((5, 5, 5))
 		psf[2, 2, 2] = 1.0
 		
-		image_shape = (None, *image.shape)
 		
 		deconv = Deconvolver(
 			psfs=psf,
-			image_shape=image_shape,
+			channel_shape=image.shape,
 			tile_size=50,  # Larger than image
 			overlap=5,
 			zpad=2
@@ -352,7 +349,7 @@ class TestCuPySpecific:
 		
 		deconv = Deconvolver(
 			psfs=psf,
-			image_shape=(None, *image.shape),
+			channel_shape=image.shape,
 			tile_size=30,
 			overlap=5,
 			zpad=2,
@@ -421,6 +418,20 @@ class TestFullDeconv:
 		
 		assert result is not None
 		assert result.shape == image.shape
+
+	def test_full_deconv_full(self):
+		image = read_im('tests/examples/single/H1_TEST_set1/Conv_zscan__020.zarr')
+		cim = cp.asarray(image[0])
+
+		psfs = np.load('tests/examples/psf_750_Scope0_final.npy')
+		result = full_deconv(image=cim, psfs=psfs, tile_size=300, overlap=89)
+
+		expected = cp.zeros([35,1200,1200], dtype=cp.float16)
+		for z in range(35):
+			zslice = cp.load(f'tests/examples/single/out/deconv.300.{z}.npz')
+			expected[z] = zslice['arr_0']
+	
+		cp.testing.assert_allclose(result.astype(cp.float16), expected, rtol=1e-6)
 
 
 class TestIntegrationAndPerformance:

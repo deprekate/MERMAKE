@@ -15,6 +15,10 @@ import concurrent.futures
 import numpy as np
 import dask.array as da
 
+import faulthandler, signal
+faulthandler.register(signal.SIGUSR1)
+
+
 #sys.path.pop(0)
 
 # Validator for the TOML file
@@ -170,19 +174,20 @@ def main():
 	psfs = np.load(args.paths.psf_file, allow_pickle=True)
 
 	# the save file executor to do the saving in parallel with computations
-	executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+	executor = concurrent.futures.ThreadPoolExecutor(max_workers=9)
 
 	message = 'Finding input image files.'
 	print_clean(message)
+
 	with ImageQueue(args) as queue:
+		print_clean(queue.summary)
 		# set some things based on input images
-		ncol = queue.shape[0]
-		zpad = queue.shape[1] - 1 # this needs to be about the same size as the input z depth
-		sx = queue.shape[2]
-		sy = queue.shape[3]
+		ncol,*chan_shape = queue.shape
+		sz,sx,sy = chan_shape
+		zpad = sz - 1 # this needs to be about the same size as the input z depth
 		# this is a buffer to use for copying into 
-		buffer = cp.empty(queue.shape[1:], dtype=cp.float32)	
-		chan = cp.empty(queue.shape[1:], dtype=cp.uint16)	
+		buffer = cp.empty(chan_shape, dtype=cp.float32)	
+		chan = cp.empty(chan_shape, dtype=cp.uint16)	
 	
 		flats = load_flats(shape = queue.shape, **vars(args.paths))
 
@@ -190,10 +195,10 @@ def main():
 		print_clean(message)
 		# these can be very large objects in gpu ram, adjust accoringly to suit gpu specs
 		deconvolver = lambda : None
-		deconvolver.hybs = Deconvolver(psfs, queue.shape, zpad = zpad, **vars(args.hybs) )
+		deconvolver.hybs = Deconvolver(psfs, chan_shape, zpad = zpad, **vars(args.hybs) )
 		# shrink the zpad to limit the loaded psfs in ram since dapi isnt deconvolved as strongly
 		# or you could just use a single psf, ie (0,1500,1500)
-		deconvolver.dapi = Deconvolver(psfs, queue.shape, zpad = zpad//2, **vars(args.dapi))
+		deconvolver.dapi = Deconvolver(psfs, chan_shape, zpad = zpad//2, **vars(args.dapi))
 
 		if args.check:
 			deconvolver.buffer = buffer
@@ -240,8 +245,8 @@ def main():
 					# save the data
 					executor.submit(queue.save_dapi, image.path, icol, Xh_plus, Xh_minus)
 			
-					if block.background:
-						slices_back, slices_chan = aligner.get_shifted_slices( Xh_plus[:,:3], chan.shape )
+					#if block.background:
+					#	slices_back, slices_chan = aligner.get_shifted_slices( Xh_plus[:,:3], chan.shape )
 			
 					image.Xh_plus = Xh_plus
 					image.Xh_minus = Xh_minus
@@ -289,12 +294,11 @@ def main():
 						executor.submit(queue.save_hyb, image.path, icol, Xhf)
 						del Xhf, Xh, keep
 				del image
-			
-			result = drift(block, **vars(args.paths))
-			if result:
-				drifts, filepath = result
-				executor.submit(drift_save, drifts, filepath)
-				del drifts, filepath
+			if (result := drift(block, **vars(args.paths))):
+				executor.submit(drift_save, *result)
+				del result
+		executor.shutdown(wait=True)
+
 
 if __name__ == "__main__":
 	main()

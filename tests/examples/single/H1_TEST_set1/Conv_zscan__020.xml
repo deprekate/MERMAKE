@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<settings>
+  <acquisition validate="True">
+    <good_lock type="boolean">True</good_lock>
+    <lock_mode type="string">Hardware Z Scan</lock_mode>
+    <lock_sum type="float">626139.0</lock_sum>
+    <lock_target type="float">0.0</lock_target>
+    <notes type="string"/>
+    <number_frames type="int">120</number_frames>
+    <stage_position type="custom">-4351.10,5862.40</stage_position>
+    <version type="string">87239df5c81398101073c40bfc107bbeabd8b01d</version>
+  </acquisition>
+  <camera1 validate="True">
+    <default_max type="int">20000</default_max>
+    <default_min type="int">100</default_min>
+    <exposure_time type="float">0.05</exposure_time>
+    <extension type="string"/>
+    <flip_horizontal type="boolean">True</flip_horizontal>
+    <flip_vertical type="boolean">False</flip_vertical>
+    <fps type="float">20.0</fps>
+    <param_spdtab_index type="int">0</param_spdtab_index>
+    <saved type="boolean">True</saved>
+    <transpose type="boolean">False</transpose>
+    <x_bin type="int">1</x_bin>
+    <x_end type="int">3000</x_end>
+    <x_pixels type="int">2800</x_pixels>
+    <x_start type="int">201</x_start>
+    <y_bin type="int">1</y_bin>
+    <y_end type="int">3000</y_end>
+    <y_pixels type="int">2800</y_pixels>
+    <y_start type="int">201</y_start>
+  </camera1>
+  <display00 validate="False">
+    <camera1 validate="True">
+      <center_x type="float">1424.0</center_x>
+      <center_y type="float">-288.0</center_y>
+      <colortable type="string">ramp.ctbl</colortable>
+      <display_max type="int">1760</display_max>
+      <display_min type="int">77</display_min>
+      <initialized type="boolean">True</initialized>
+      <scale type="int">-3</scale>
+      <sync type="int">0</sync>
+    </camera1>
+    <feed_name type="string">camera1</feed_name>
+  </display00>
+  <film validate="False">
+    <acq_mode type="string">fixed_length</acq_mode>
+    <auto_increment type="boolean">True</auto_increment>
+    <auto_shutters type="boolean">True</auto_shutters>
+    <extension type="string"/>
+    <filename type="string">movie</filename>
+    <filetype type="string">.comp.zarr</filetype>
+    <frames type="int">113</frames>
+    <want_bell type="boolean">True</want_bell>
+  </film>
+  <focuslock validate="True">
+    <calibrate validate="True">
+      <deadtime type="int">20</deadtime>
+      <frames_to_pause type="int">2</frames_to_pause>
+      <range type="float">600.0</range>
+      <step_size type="float">10.0</step_size>
+    </calibrate>
+    <find_sum validate="True">
+      <step_size type="float">1.0</step_size>
+    </find_sum>
+    <hardware_z_scan validate="True">
+      <z_offsets type="string">0:-15:-0.4:3</z_offsets>
+    </hardware_z_scan>
+    <jump_size type="float">0.2</jump_size>
+    <locked validate="True">
+      <buffer_length type="int">5</buffer_length>
+      <lock_gain type="float">0.5</lock_gain>
+      <lock_gain_max type="float">0.7</lock_gain_max>
+      <minimum_sum type="float">-1.0</minimum_sum>
+      <offset_threshold type="float">100.0</offset_threshold>
+    </locked>
+    <optimal_mode validate="True">
+      <bracket_step type="float">1000.0</bracket_step>
+      <quality_threshold type="float">0.0</quality_threshold>
+      <scan_hold type="int">10</scan_hold>
+      <scan_step type="float">100.0</scan_step>
+    </optimal_mode>
+    <scan validate="True">
+      <minimum_sum type="float">10000.0</minimum_sum>
+      <offset_threshold type="float">700.0</offset_threshold>
+      <scan_range type="float">10.0</scan_range>
+      <scan_step type="float">0.5</scan_step>
+    </scan>
+  </focuslock>
+  <illumination validate="True">
+    <default_power type="custom">0.800,0.400,0.000,0.000,0.528</default_power>
+    <on_off_state type="custom">False,False,False,False,False</on_off_state>
+    <power_buttons type="custom">[[['Max', 1.0], ['Low', 0.1]], [['Max', 1.0], ['Low', 0.1]], [['Max', 1.0], ['Low', 0.1]], [['Max', 1.0], ['Low', 0.1]], [['Max', 1.0], ['Low', 0.1]]]</power_buttons>
+    <shutters type="string">C:\storm-control-scope3\storm_control\hal4000\batFiles\750_647_405_shutter.xml</shutters>
+  </illumination>
+  <mosaic validate="False">
+    <flip_horizontal type="boolean">True</flip_horizontal>
+    <flip_vertical type="boolean">False</flip_vertical>
+    <obj1 type="custom">40x,0.16,0.0,0.0</obj1>
+    <obj2 type="custom">4x,1.47,-497,274</obj2>
+    <obj3 type="custom">60x,0.108,0,0</obj3>
+    <objective type="string">obj1</objective>
+    <transpose type="boolean">False</transpose>
+  </mosaic>
+  <stage validate="True">
+    <large_step_size type="float">25.0</large_step_size>
+    <small_step_size type="float">5.0</small_step_size>
+  </stage>
+  <timing validate="True">
+    <time_base type="string">camera1</time_base>
+  </timing>
+</settings>

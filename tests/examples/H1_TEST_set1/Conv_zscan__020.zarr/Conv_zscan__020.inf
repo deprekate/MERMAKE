@@ -1,8 +1,0 @@
-binning = 1 x 1
-data type = 16 bit integers (binary, little endian)
-frame dimensions = 2800 x 2800
-number of frames = 120
-x_start = 1
-x_end = 2800
-y_start = 1
-y_end = 2800
