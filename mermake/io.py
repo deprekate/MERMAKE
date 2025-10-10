@@ -5,7 +5,7 @@ import glob
 from pathlib import Path
 from fnmatch import fnmatch
 from types import SimpleNamespace
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Union
 import json
 import argparse
 from argparse import Namespace
@@ -14,6 +14,7 @@ import concurrent.futures
 import queue
 import threading
 from itertools import chain
+from collections import defaultdict
 
 import xml.etree.ElementTree as ET
 import dask.array as da
@@ -22,6 +23,13 @@ import numpy as np
 
 from . import blur
 from . import __version__
+
+import logging
+logging.basicConfig(
+	format="{asctime} - {levelname} - {message}",
+	style="{",
+	datefmt="%Y-%m-%d %H:%M",
+)
 
 def center_crop(A, shape):
 	"""Crop numpy array to (h, w) from center."""
@@ -178,18 +186,43 @@ class FolderFilter:
 		self.start_parts = self._parse_pattern(self.start_pattern)
 		self.end_parts = self._parse_pattern(self.end_pattern)
 		
-	def _parse_pattern(self, pattern: str) -> Optional[Tuple]:
+	def _parse_pattern(self, haystack: str) -> Optional[Tuple]:
 		"""Parse a pattern using the regex to extract components"""
-		match = self.regex.match(pattern)
+		match = self.regex.match(haystack)
 		if match:
 			return match.groups()
 		return None
-	
-	def _extract_numeric_part(self, text: str) -> int:
-		"""Extract numeric part from text like 'H1' -> 1"""
-		match = re.search(r'\d+', text)
-		return int(match.group()) if match else 0
-	
+
+	def _undo_regex(self, groups: Union[Tuple, re.Match, None]) -> Optional[str]:
+		"""
+		Reconstruct a string from captured groups based on the stored regex pattern.
+		If `groups` is a re.Match it will use match.groups().
+		If you pass fewer groups than the regex has, reconstruction stops right
+		after the last provided group (no extra literal text appended).
+		"""
+		if groups is None:
+			return None
+
+		# Accept either a tuple-of-groups or a Match object.
+		if hasattr(groups, "groups"):
+			groups = groups.groups()
+		groups = tuple(groups)
+
+		pattern = self.regex.pattern
+		parts = re.split(r'\([^)]*\)', pattern)  # literal chunks between capture groups
+
+		rebuilt = []
+		for i, g in enumerate(groups):
+			literal = parts[i] if i < len(parts) else ''
+			rebuilt.append(literal)
+			rebuilt.append('' if g is None else str(g))
+
+		# Append the trailing literal only if all groups were provided.
+		if len(groups) == len(parts) - 1:
+			rebuilt.append(parts[len(groups)])
+
+		return ''.join(rebuilt)
+
 	def _compare_patterns(self, file_parts: Tuple, start_parts: Tuple, end_parts: Tuple) -> bool:
 		"""
 		Compare if file_parts falls within the range defined by start_parts and end_parts
@@ -233,16 +266,6 @@ class FolderFilter:
 			return False
 		return self._compare_patterns(file_parts, self.start_parts, self.end_parts)
 	
-	def filter_files(self, filenames: List[str]) -> List[str]:
-		"""Filter filenames that fall within the specified range"""
-		matching_files = []
-		
-		for filename in filenames:
-			if self.isin(filename):
-				matching_files.append(filename)
-				
-		return matching_files
-
 	def get_matches(self, folders):
 		matches = dict()
 		for root in folders:
@@ -291,7 +314,7 @@ class Block(list):
 	
 class ImageQueue:
 	__version__ = __version__
-	def __init__(self, args, prefetch_count=6):
+	def __init__(self, args, prefetch_count=7):
 		self.args = args
 		self.args_array = namespace_to_array(self.args.settings)
 		self.__dict__.update(vars(args.paths))
@@ -301,12 +324,42 @@ class ImageQueue:
 		fov_min, fov_max = (-float('inf'), float('inf'))
 		if hasattr(self, "fov_range"):
 			fov_min, fov_max = map(float, self.fov_range.split(':'))
-		matches = FolderFilter(self.hyb_range, self.regex, fov_min, fov_max).get_matches(self.hyb_folders)
+		
 		background = None
 		if hasattr(self, "background_range"):
-			background = FolderFilter(self.background_range, self.regex, fov_min, fov_max).get_matches(self.hyb_folders)
-			self.background = True
+			filtered = FolderFilter(self.background_range, self.regex, fov_min, fov_max)
+			background = filtered.get_matches(self.hyb_folders)
+		filtered = FolderFilter(self.hyb_range, self.regex, fov_min, fov_max)
+		matches = filtered.get_matches(self.hyb_folders)
 
+		# do output summary, eventually replace with terminal gui
+		counts = defaultdict(lambda: defaultdict(int))
+		rounds = dict()
+		for iset,ifov in matches:
+			for path in matches[(iset,ifov)]:
+				base = os.path.basename(os.path.dirname(path))
+				parts = list(filtered._parse_pattern(base))
+				parts = parts[:3]
+				undone = filtered._undo_regex(parts)
+				counts[iset][undone] += 1
+				rounds[undone] = True
+		rounds = sorted(rounds)
+		width = max(len(r) for r in rounds) + 1
+		summary = ''
+		summary += 'SUMMARY'.center(len(rounds) * width + width, '-')	
+		summary += '\n'
+		summary += 'set'.ljust(width)
+		for undone in rounds:
+			summary += undone.rjust(width)
+		summary += '\n'
+		for iset in counts:
+			summary += str(iset).ljust(width)
+			for undone in rounds:
+				summary += str(counts[iset][undone]).rjust(width)
+			summary += '\n'
+		summary += ''.center(len(rounds) * width + width, '-')
+		self.summary = summary
+			
 		# Peek at first image to set shape/dtype
 		first_image = None
 		for path in chain.from_iterable(matches.values()):
@@ -322,14 +375,13 @@ class ImageQueue:
 	
 		# interlace the background with the regular images
 		shared = set(matches.keys()).intersection(background.keys()) if background else matches.keys()
-		#matches = [item for key in shared for item in matches[key]]
-		#background = [item for key in shared for item in background[key]] if background else None
+
 		interlaced = []
 		for key in shared:
 			if background and key in background:
 				interlaced.extend(background[key])  # put background first
 			hsorted = self.hsorted(matches[key])
-			interlaced.extend(hsorted)			    # then all matches for that iset,ifov
+			interlaced.extend(hsorted)				# then all matches for that iset,ifov
 
 		self.files = iter(interlaced)
 
@@ -395,10 +447,12 @@ class ImageQueue:
 		if img is None:
 			raise StopIteration
 		return img
-	'''
 	
+	'''
 	def __next__(self):
 		"""Return the next block of images (same FOV)."""
+		# if item is None it means end of queue
+		# if item is False it means a bad zarr
 		block = self.block
 		first_item = self.queue.get()
 
@@ -442,69 +496,8 @@ class ImageQueue:
 		return block
 
 	'''
-	def __next__(self):
-		"""Return the next block of images (same FOV)."""
-		logger.debug(f"__next__ called, queue size: {getattr(self.queue, 'qsize', lambda: 'unknown')()}")
-		
-		block = Block()  # Fresh block each time
-		
-		# Get first item with debugging
-		logger.debug("Getting first item from queue...")
-		start_time = time.time()
-		first_item = self.queue.get()
-		get_time = time.time() - start_time
-		logger.debug(f"Got first item in {get_time:.3f}s: {type(first_item).__name__}")
-		
-		if first_item is None:
-			logger.debug("First item is None, raising StopIteration")
-			raise StopIteration
-		
-		block.append(first_item)
-		
-		# Handle FOV logic with debugging
-		if first_item == False:
-			ifov = None
-			logger.debug("First item is False, ifov = None")
-		else:
-			logger.debug(f"Getting ifov for: {getattr(first_item, 'path', 'NO_PATH_ATTR')}")
-			ifov = get_ifov(first_item.path)
-			logger.debug(f"ifov = {ifov}")
-		
-		# Keep consuming queue until FOV changes or None
-		item_count = 1
-		while True:
-			logger.debug(f"Loop iteration {item_count}, getting next item...")
-			start_time = time.time()
-			item = self.queue.get()
-			get_time = time.time() - start_time
-			logger.debug(f"Got item {item_count} in {get_time:.3f}s: {type(item).__name__}")
-			
-			if item == False:
-				logger.debug("Got False, breaking")
-				break
-			if item is None:
-				logger.debug("Got None, putting back and breaking")
-				self.queue.put(None)
-				break
-			
-			logger.debug(f"Getting ifov for item {item_count}: {getattr(item, 'path', 'NO_PATH_ATTR')}")
-			item_ifov = get_ifov(item.path)
-			logger.debug(f"Item ifov: {item_ifov}, current ifov: {ifov}")
-			
-			if item_ifov != ifov:
-				logger.debug("FOV changed, putting item back and breaking")
-				self.queue.put(item)  # Put back the item with different FOV
-				break
-			
-			block.append(item)
-			item_count += 1
-			logger.debug(f"Added item to block, block size now: {len(block)}")
-		
-		logger.debug(f"Returning block with {len(block)} items")
-		return block
-	'''
-
-	'''
+		# this code is so we can eventually add a --watch parameter so mermake keeps
+		# runnning after processing all fovs and then processes any new fovs that appear
 		# If we reach here, there are no more images in the current batch
 		if False:
 			# In watch mode, look for new files

@@ -44,16 +44,16 @@ def batch_laplacian_fft(batch_size, shape):
 
 
 class Deconvolver:
-	def __init__(self, psfs, image_shape, tile_size=300, zpad=0, overlap=89, beta=0.001, xp=cp, **kwargs):
+	def __init__(self, psfs, channel_shape, tile_size=300, zpad=0, overlap=89, beta=0.001, xp=cp, **kwargs):
 		self.tile_size = tile_size
-		self.tile_height = image_shape[1]
+		self.tile_height = channel_shape[0]
 
 		if isinstance(psfs, dict):
 			# new method using multiple psfs taken across fov
 			psf_stack = np.stack(list(map(self.center_psf, list(psfs.values()))))
 		else:
 			# old single psf method
-			batch_size = (image_shape[-1] // tile_size) ** 2
+			batch_size = (channel_shape[-1] // tile_size) ** 2
 			psf_stack = self.center_psf(psfs)
 			psf_stack = self.center_psf(psfs)[None, ...]
 		psf_stack = np.pad(psf_stack, ((0, 0), (zpad, zpad), (overlap, overlap), (overlap, overlap)), mode='constant')
@@ -174,15 +174,11 @@ class Deconvolver:
 
 		overlap = self.overlap
 		sz, sx, sy = image.shape
-		# Create a CUDA stream for better synchronization
-		#stream = cp.cuda.Stream(non_blocking=True)
-		#with stream:
 		for x, y, tile, _ in self.tile_wise(image, flat_field=flat_field, blur_radius=blur_radius):
 				zdim,xdim,ydim = tile.shape
 				xdim -= (2 * overlap)
 				ydim -= (2 * overlap)
 				output[:, x:x+xdim, y:y+ydim] = tile[:,overlap:-overlap, overlap:-overlap]
-		#stream.synchronize()
 		return output
 
 	def tiled(self, image):
@@ -277,8 +273,7 @@ def full_deconv(image, psfs, flat_field = None, tile_size=300, zpad = None, over
 	shape = image.shape
 	if zpad is None:
 		zpad = shape[0]
-	shape = (None,) + shape
-	deconvolver = Deconvolver(psfs, image_shape=shape, zpad=zpad, tile_size=tile_size, overlap=overlap, beta=beta)
+	deconvolver = Deconvolver(psfs, channel_shape=shape, zpad=zpad, tile_size=tile_size, overlap=overlap, beta=beta)
 	deconv = deconvolver.apply(image, flat_field)
 
 	del deconvolver
