@@ -145,7 +145,7 @@ void local_maxima(const float* image, float threshold, int delta, int delta_fit,
 }
 
 
-#define MAX_KERNEL_POINTS 515
+#define MAX_KERNEL_POINTS 600
 extern "C" __global__
 void delta_fit_cross_corr(
 	const float* __restrict__ image,

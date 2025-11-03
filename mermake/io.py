@@ -44,6 +44,7 @@ def load_flats(flat_field_tag, shape=None, **kwargs):
 	files = sorted(glob.glob(flat_field_tag + '*'))
 	for file in files:
 		im = np.load(file)['im']
+		assert all(a >= b for a, b in zip(im.shape, shape)), 'flat file is smaller than image'
 		if shape is not None:
 			im = center_crop(im, shape)
 		cim = cp.array(im,dtype=cp.float32)
@@ -294,16 +295,23 @@ class FolderFilter:
 class Block(list):
 	def __init__(self, items=None):
 		self.background = None
-		if isinstance(items, (list, tuple)):
-			for item in items:
-				self.append(item)
-		elif items:
-			self.append(items)
+	def add(self, image):
+		fov, tag = path_parts(image.path)
+		if self.fov() == fov or not self:
+			if self:
+				del self[-1].data
+			self.append(image)
+			return True
+		else:
+			return False
+	
 	def parts(self):
 		path = self[0].path
 		fov, tag = path_parts(path)
 		return fov, tag
 	def fov(self):
+		if not self:
+			return None
 		fov,_ = self.parts()
 		return fov
 	def tag(self):
@@ -311,10 +319,13 @@ class Block(list):
 		return tag
 	def iset(self):
 		return get_iset(self[0].path)
+	def __repr__(self):
+		paths = [image.path for image in self]
+		return f"Block({paths})"
 	
 class ImageQueue:
 	__version__ = __version__
-	def __init__(self, args, prefetch_count=7):
+	def __init__(self, args, prefetch_count=5):
 		self.args = args
 		self.args_array = namespace_to_array(self.args.settings)
 		self.__dict__.update(vars(args.paths))
@@ -403,6 +414,8 @@ class ImageQueue:
 		fit_files = list()
 		# check if the fov has been fitted
 		fov, tag = path_parts(path)
+
+		# we need to test whether the load worked!!!!!!!!!!
 		for icol in range(self.shape[0] - 1):
 			filename = self.hyb_save.format(fov=fov, tag=tag, icol=icol)
 			filepath = os.path.join(self.output_folder, filename)
@@ -418,6 +431,18 @@ class ImageQueue:
 		else:
 			container.Xh_plus = cp.load(filepath)['Xh_plus']
 			container.Xh_minus = cp.load(filepath)['Xh_minus']
+		# attach drift file to container
+		'''
+		iset = get_iset(path)
+		filename = self.drift_save.format(fov=fov, iset=iset)
+		filepath = os.path.join(self.output_folder, filename)
+		if os.path.exists(filepath):
+			container.Xh_plus = cp.load(filepath)['Xh_plus']
+			container.Xh_minus = cp.load(filepath)['Xh_minus']
+			con
+		print(filepath)
+		exit()
+		'''
 		return container
 
 	def _worker(self):
@@ -433,15 +458,15 @@ class ImageQueue:
 				#dummy = lambda : None
 				#dummy.path = path
 				#self.queue.put(dummy)
-				self.queue.put(False)
+				#self.queue.put(False)
 				continue
 		# Signal no more images
+		container.last = True
 		self.queue.put(None)
 
 	def __iter__(self):
 		return self
 
-	'''
 	def __next__(self):
 		img = self.queue.get()
 		if img is None:
@@ -494,6 +519,7 @@ class ImageQueue:
 			block.clear()
 		block.ifov = ifov
 		return block
+	'''
 
 	'''
 		# this code is so we can eventually add a --watch parameter so mermake keeps
