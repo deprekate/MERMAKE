@@ -36,7 +36,7 @@ def find_local_maxima(image, threshold=None, delta=1, delta_fit=0, raw=None, sig
 	sigmaXY = cp.float32(sigmaXY)
 	
 	count = cp.zeros(1, dtype=cp.uint32)
-	threads = 256
+	threads = 64 #256
 	blocks = (total_voxels + threads - 1) // threads
 	
 	# 1st pass: Count only to help limit GPU RAM

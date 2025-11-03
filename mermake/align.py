@@ -28,7 +28,6 @@ class Aligner:
 			)
 
 		self.X_ref = X_ref[:,:3]
-
 		# Build KDTree once
 		self.tree = KDTree(self.X_ref)
 
@@ -156,8 +155,8 @@ class DualAligner:
 		return tzxyf, tzxy_plus, tzxy_minus, N_plus, N_minus
 
 def drift_save(data, filepath):
-    with open(filepath, 'wb') as f:
-        pickle.dump(data, f)
+	with open(filepath, 'wb') as f:
+		pickle.dump(data, f)
 
 def drift(block, **kwargs):
 	output_folder = kwargs['output_folder']
