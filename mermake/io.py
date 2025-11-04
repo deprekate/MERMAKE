@@ -589,7 +589,7 @@ class ImageQueue:
 			Xhf = xp.vstack(Xhf)
 		else:
 			xp = np
-			Xhf = np.array([])
+			Xhf = np.zeros([0,8], dtype=np.float32)
 		if not os.path.exists(filepath) or (hasattr(self, "redo") and self.redo):
 			xp.savez_compressed(filepath, Xh=Xhf, version=__version__, args=self.args_array)
 			#  Optional integrity check after saving
