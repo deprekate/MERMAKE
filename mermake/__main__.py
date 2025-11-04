@@ -15,9 +15,8 @@ import concurrent.futures
 import numpy as np
 import dask.array as da
 
-import faulthandler, signal
-faulthandler.register(signal.SIGUSR1)
-
+#import faulthandler, signal
+#faulthandler.register(signal.SIGUSR1)
 
 #sys.path.pop(0)
 
