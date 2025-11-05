@@ -186,7 +186,6 @@ def main():
 		# this is a buffer to use for copying into 
 		buffer = cp.empty(chan_shape, dtype=cp.float32)	
 		chan = cp.empty(chan_shape, dtype=cp.uint16)	
-	
 		flats = load_flats(shape = queue.shape, **vars(args.paths))
 
 		message = 'Loading PSFs into GPU ram.'
@@ -213,23 +212,38 @@ def main():
 			print('running on:', image.path, flush=True)
 			icol = -1
 			data = image[icol].data
+			flat = flats[icol]
 			if not isinstance(data, da.Array):
 				chan.set(data)
-				flat = flats[icol]
 				# Deconvolve in-place into the buffer
 				deconvolver.dapi.apply(chan, flat_field=flat, output=buffer, **vars(args.dapi))
 				# the dapi channel is further normalized by the stdev
 				std_val = float(cp.asnumpy(cp.linalg.norm(buffer.ravel()) / cp.sqrt(buffer.size)))
 				cp.divide(buffer, std_val, out=buffer)
-				image.Xh_plus = find_local_maxima(buffer, raw = chan, **vars(args.dapi) )
+				Xh_plus = find_local_maxima(buffer, raw = chan, **vars(args.dapi) )
 				cp.multiply(buffer, -1, out=buffer)
-				image.Xh_minus = find_local_maxima(buffer, raw = chan, **vars(args.dapi) )
+				Xh_minus = find_local_maxima(buffer, raw = chan, **vars(args.dapi) )
 				# save the data
-				executor.submit(queue.save_dapi, image.path, icol, image.Xh_plus, image.Xh_minus)
-		
-				#if block.background:
-				#	slices_back, slices_chan = aligner.get_shifted_slices( Xh_plus[:,:3], chan.shape )
-		
+				setattr(image, f'Xh_plus', Xh_plus)
+				setattr(image, f'Xh_minus', Xh_minus)
+				executor.submit(queue.save_xfits, image, icol)
+				del Xh_plus, Xh_minus
+
+			slices_chan = tuple([slice(0,None)] * 3)
+			# this is for background subtraction
+			if image in queue.background_files:
+				aligner = Aligner(image.Xh_plus)
+				block.back = list()
+				for icol in range(ncol - 1):
+					block.back.append(cp.asarray(image[icol].data))
+				continue
+			elif 'aligner' in locals(): #queue.background_files:
+				slices_back, slices_chan = aligner.get_shifted_slices( image.Xh_plus[:,:3], chan.shape )
+				#immed = cp.asnumpy(flat)
+				#im_sig_ = np.array(im_sig,dtype=np.float32)[slices_chan]
+				#im_bk_ = np.array(im_bak,dtype=np.float32)[slices_back]
+				#fixed = im_sig_ - im_bk_
+
 			for icol in range(ncol - 1):
 				data = image[icol].data
 				if not isinstance(data, da.Array):
@@ -237,20 +251,29 @@ def main():
 					flat = flats[icol]
 					# there is probably a better way to do the Xh stacking
 					Xhf = []
-					for x,y,tile,raw in deconvolver.hybs.tile_wise(chan, flat, **vars(args.hybs)):
+					for x,y,tile,raw in deconvolver.hybs.tile_wise(chan[slices_chan], flat[slices_chan[1:]], **vars(args.hybs)):
 						Xh = find_local_maxima(tile, raw = raw, **vars(args.hybs))
 						keep = cp.all((Xh[:,1:3] >= overlap) & (Xh[:,1:3] < cp.array([tile.shape[1] - overlap, tile.shape[2] - overlap])), axis=-1)
-						Xh = Xh[keep]
-						Xh[:,1] += x - overlap
-						Xh[:,2] += y - overlap
-						Xhf.append(Xh)
-					executor.submit(queue.save_hyb, image.path, icol, Xhf)
+						if cp.any(keep):
+							Xh = Xh[keep]
+							Xh[:,1] += x - overlap
+							Xh[:,2] += y - overlap
+							Xhf.append(Xh)
+					if Xhf:
+						Xhf = cp.vstack(Xhf)
+					else:
+						Xhf = np.zeros([0,8], dtype=np.float32)
+					Xhf[:,:3] += cp.asarray([s.start for s in slices_chan])
+					setattr(image, f'col{icol}', Xhf)
+					executor.submit(queue.save_xfits, image, icol)
 					del Xhf, Xh, keep
 			# this block of images for a fov is over
 			if not block.add(image) or hasattr(image, 'last'):
+				# do the drift
 				if (result := drift(block, **vars(args.paths))):
 					executor.submit(drift_save, *result)
 					del result
+				# do the decoding
 				block.clear()
 				block.add(image)
 			del image
