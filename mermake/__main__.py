@@ -153,7 +153,7 @@ def main():
 	os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
 	import cupy as cp
 	#cp.cuda.Device(0).use() # The above export doesnt always work so force CuPy to use GPU 0
-	from mermake.deconvolver import Deconvolver, full_deconv
+	from mermake.deconvolver import Deconvolver
 	from mermake.maxima import find_local_maxima
 	from mermake.io import load_flats
 	from mermake.io import ImageQueue, dict_to_namespace, Block
