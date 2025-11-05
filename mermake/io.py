@@ -96,6 +96,17 @@ class Container:
 			arr = arr.astype(dtype)
 		return arr
 
+	def __eq__(self, other):
+		if isinstance(other, Container):
+			return self.path == other.path
+		elif isinstance(other, str):
+			return self.path == other
+		return False
+
+	def __hash__(self):
+		return hash(self.path)
+
+
 	def compute(self):
 		"""Compute only the current container (recursively if channels)."""
 		if isinstance(self.data, list):
@@ -336,10 +347,12 @@ class ImageQueue:
 		if hasattr(self, "fov_range"):
 			fov_min, fov_max = map(float, self.fov_range.split(':'))
 		
+		self.background_files = set()
 		background = None
 		if hasattr(self, "background_range"):
 			filtered = FolderFilter(self.background_range, self.regex, fov_min, fov_max)
 			background = filtered.get_matches(self.hyb_folders)
+			self.background_files = set(chain.from_iterable(background.values()))
 		filtered = FolderFilter(self.hyb_range, self.regex, fov_min, fov_max)
 		matches = filtered.get_matches(self.hyb_folders)
 
@@ -396,7 +409,6 @@ class ImageQueue:
 
 		self.files = iter(interlaced)
 
-		self.block = Block()
 		# Start worker thread(s)
 		self.queue = queue.Queue(maxsize=prefetch_count)
 		self.stop_event = threading.Event()
@@ -415,14 +427,16 @@ class ImageQueue:
 		# check if the fov has been fitted
 		fov, tag = path_parts(path)
 
-		# we need to test whether the load worked!!!!!!!!!!
+		# we should test whether the load worked!!!!!!!!!!
 		for icol in range(self.shape[0] - 1):
 			filename = self.hyb_save.format(fov=fov, tag=tag, icol=icol)
 			filepath = os.path.join(self.output_folder, filename)
-			if not os.path.exists(filepath):
+			# only compute if the image has not been processed or if it is background
+			if not os.path.exists(filepath) or container in self.background_files:
 				container[icol].compute()
 			else:
-				container[icol].fits = cp.load(filepath)
+				Xh = cp.load(filepath)['Xh']
+				setattr(container, f'col{icol}', Xh)
 		icol += 1
 		filename = self.dapi_save.format(fov=fov, tag=tag, icol=icol)
 		filepath = os.path.join(self.output_folder, filename)
@@ -432,17 +446,15 @@ class ImageQueue:
 			container.Xh_plus = cp.load(filepath)['Xh_plus']
 			container.Xh_minus = cp.load(filepath)['Xh_minus']
 		# attach drift file to container
-		'''
 		iset = get_iset(path)
 		filename = self.drift_save.format(fov=fov, iset=iset)
 		filepath = os.path.join(self.output_folder, filename)
 		if os.path.exists(filepath):
-			container.Xh_plus = cp.load(filepath)['Xh_plus']
-			container.Xh_minus = cp.load(filepath)['Xh_minus']
-			con
-		print(filepath)
-		exit()
-		'''
+			drifts, files, ref, ref_path = cp.load(filepath, allow_pickle=True)
+			container.drifts = drifts
+			container.drift_files = files
+			container.drift_ref = ref
+			container.drift_ref_path = ref_path
 		return container
 
 	def _worker(self):
@@ -473,54 +485,6 @@ class ImageQueue:
 			raise StopIteration
 		return img
 	
-	'''
-	def __next__(self):
-		"""Return the next block of images (same FOV)."""
-		# if item is None it means end of queue
-		# if item is False it means a bad zarr
-		block = self.block
-		first_item = self.queue.get()
-
-		if first_item is None:
-			if block:
-				self.block = Block()
-				self.queue.put(None)
-				return block
-			else:
-				raise StopIteration
-		
-		if hasattr(self, "background_range"):
-			self.block.background = first_item
-		else:
-			block.append(first_item)
-
-		#ifov = None if first_item == False else get_ifov(first_item.path)
-		#iset = None if first_item == False else get_iset(first_item.path)
-		ifov = get_ifov(first_item.path) if first_item else first_item
-		iset = get_iset(first_item.path) if first_item else first_item
-		
-		# Keep consuming queue until FOV changes or None
-		while True:
-			item = self.queue.get()
-			if item == False:
-				break
-			if item is None:
-				self.queue.put(None)
-				self.block = Block()
-				break
-			if (get_ifov(item.path) != ifov) or (get_iset(item.path) != iset):
-				if hasattr(self, "background_range"):
-					self.block.background = item
-				else:
-					self.block = Block(item)
-				break
-			block.append(item)
-		if hasattr(self, "background_range") and first_item == False:
-			block.clear()
-		block.ifov = ifov
-		return block
-	'''
-
 	'''
 		# this code is so we can eventually add a --watch parameter so mermake keeps
 		# runnning after processing all fovs and then processes any new fovs that appear
@@ -561,9 +525,26 @@ class ImageQueue:
 	def __exit__(self, exc_type, exc_val, exc_tb):
 		self.close()
 
+	'''
 	def close(self):
 		self.stop_event.set()
 		self.thread.join()
+	'''
+	def close(self):
+		self.stop_event.set()
+    
+		# Drain the queue so the worker thread can finish
+		try:
+			while True:
+				self.queue.get_nowait()
+		except queue.Empty:
+			pass
+    
+		# Use a timeout to avoid hanging indefinitely
+		self.thread.join(timeout=2.0)
+    
+		if self.thread.is_alive():
+			print("Warning: worker thread did not terminate", flush=True)
 
 	def _is_fitted(self, path):
 		fov, tag = path_parts(path)
@@ -578,20 +559,25 @@ class ImageQueue:
 			return False
 		return True
 
-	def save_hyb(self, path, icol, Xhf, attempt=1, max_attempts=3):
-		fov,tag = path_parts(path)
-		filename = self.hyb_save.format(fov=fov, tag=tag, icol=icol)
-		filepath = os.path.join(self.output_folder, filename)
-	
-		Xhf = [x for x in Xhf if x.shape[0] > 0]
-		if Xhf:
-			xp = cp.get_array_module(Xhf[0])
-			Xhf = xp.vstack(Xhf)
+	def save_xfits(self, image, icol=-1, attempt=1, max_attempts=3):
+		fov, tag = path_parts(image.path)
+		
+		# determine filename and data based on icol
+		if icol == -1:
+			filename = self.dapi_save.format(fov=fov, tag=tag)
+			data = {
+				'Xh_plus': image.Xh_plus,
+				'Xh_minus': image.Xh_minus,
+			}
 		else:
-			xp = np
-			Xhf = np.array([])
-		if not os.path.exists(filepath) or (hasattr(self, "redo") and self.redo):
-			xp.savez_compressed(filepath, Xh=Xhf, version=__version__, args=self.args_array)
+			filename = self.hyb_save.format(fov=fov, tag=tag, icol=icol)
+			Xh = getattr(image, f'col{icol}')
+			data = {'Xh': Xh}
+		
+		# save if file doesn't exist
+		filepath = os.path.join(self.output_folder, filename)
+		if not os.path.exists(filepath):
+			cp.savez_compressed(filepath, version=__version__, args=self.args_array, **data)
 			#  Optional integrity check after saving
 			# this seems to greatly slow everything down
 			#try:
@@ -603,32 +589,6 @@ class ImageQueue:
 			#		return self.save_hyb(path, icol, Xhf, attempt=attempt+1, max_attempts=max_attempts)
 			#	else:
 			#		raise RuntimeError(f"Failed saving xfit file after {max_attempts} attempts: {filepath}")
-		del Xhf
-		if xp == cp:
-			xp._default_memory_pool.free_all_blocks()  # Free standard GPU memory pool
-
-	def save_dapi(self, path, icol, Xh_plus, Xh_minus, attempt=1, max_attempts=3):
-		fov, tag = path_parts(path)
-		filename = self.dapi_save.format(fov=fov, tag=tag, icol=icol)
-		filepath = os.path.join(self.output_folder, filename)
-	
-		xp = cp.get_array_module(Xh_plus)
-		if not os.path.exists(filepath) or (hasattr(self, "redo") and self.redo):
-			xp.savez_compressed(filepath, Xh_plus=Xh_plus, Xh_minus=Xh_minus, version=__version__, args=self.args_array)
-			#  Optional integrity check after saving
-			# this seems to greatly slow everything down
-			#try:
-			#	with np.load(filepath) as dat:
-			#		_ = dat["Xh_minus"].shape  # Try accessing a key
-			#except Exception as e:
-			#	os.remove(filepath)
-			#	if attempt < max_attempts:
-			#		return self.save_dapi(path, icol, Xh_plus, Xh_minus, attempt=attempt+1, max_attempts=max_attempts)
-			#	else:
-			#		raise RuntimeError(f"Failed saving xfit file after {max_attempts} attempts: {filepath}")
-		del Xh_plus, Xh_minus
-		if xp == cp:
-			xp._default_memory_pool.free_all_blocks()
 
 def read_xml(path):
 	# Open and parse the XML file

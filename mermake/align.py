@@ -80,8 +80,6 @@ class Aligner:
 		tzxy = self.get_best_translation_points(X)
 		tzxy = tzxy.round().astype(int).tolist()
 		for t, sh in zip(tzxy, shape):
-			print(t, sh)
-			print(type(t), type(sh))
 			if t > 0:
 				slices_sig.append(slice(t, sh))
 				slices_bk.append(slice(0, sh - t))
@@ -94,7 +92,7 @@ class Aligner:
 		xp = self.xp
 	
 		# do thresholding of the maximas
-		if self.threshold:
+		if self.th:
 			X = self.threshold(X)
 
 		X = X[:,:3]
