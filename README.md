@@ -1,6 +1,6 @@
 Introduction
 ------------
-MERMAKE processes MERFISH and smFISH imaging data by detecting local intensity maxima (puncta) in 3D image stacks. In multiplexed experiments (MERFISH), these puncta are decoded using a user-supplied codebook, while in smFISH mode, the puncta are simply called and reported as-is.
+MERMAKE processes MERFISH, smFISH, and IF imaging data by detecting local intensity maxima (puncta) in 3D image stacks. In multiplexed experiments (MERFISH), these puncta are decoded using a user-supplied codebook, while in smFISH mode and IF, the puncta are simply called and reported as-is.
 
 To install `MERMAKE`,
 ```
