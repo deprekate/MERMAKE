@@ -56,7 +56,7 @@ flat_field_tag = "flat_field/Scope3_"
 hyb_range = "H1_*_set1:H16_*_set3"
 hyb_folders = ["experiment_folder"]
 output_folder = "output"
-
+background_range = 'H0_background_set1:H0_background_set3'
 #---------------------------------------------------------------------------------------#
 #---------------------------------------------------------------------------------------#
 #           you probably dont have to change any of the settings below                  #

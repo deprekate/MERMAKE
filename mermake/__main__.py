@@ -155,8 +155,8 @@ def main():
 	#cp.cuda.Device(0).use() # The above export doesnt always work so force CuPy to use GPU 0
 	from mermake.deconvolver import Deconvolver
 	from mermake.maxima import find_local_maxima
-	from mermake.io import load_flats
-	from mermake.io import ImageQueue, dict_to_namespace, Block
+	from mermake.io import load_flats, ImageQueue, dict_to_namespace, Block
+	from mermake import math 
 	#from mermake.io import dict_to_namespace
 	#from mermake.image_queue import ImageQueue
 
@@ -231,24 +231,24 @@ def main():
 
 			slices_chan = tuple([slice(0,None)] * 3)
 			# this is for background subtraction
+			aligner = None
 			if image in queue.background_files:
 				aligner = Aligner(image.Xh_plus)
-				block.back = list()
-				for icol in range(ncol - 1):
-					block.back.append(cp.asarray(image[icol].data))
+				block.back = [cp.asarray(image[icol].data) for icol in range(ncol - 1)]
 				continue
-			elif 'aligner' in locals(): #queue.background_files:
+			elif aligner:
 				slices_back, slices_chan = aligner.get_shifted_slices( image.Xh_plus[:,:3], chan.shape )
-				#immed = cp.asnumpy(flat)
-				#im_sig_ = np.array(im_sig,dtype=np.float32)[slices_chan]
-				#im_bk_ = np.array(im_bak,dtype=np.float32)[slices_back]
-				#fixed = im_sig_ - im_bk_
 
 			for icol in range(ncol - 1):
 				data = image[icol].data
 				if not isinstance(data, da.Array):
 					chan.set(data)
 					flat = flats[icol]
+
+					if aligner:
+						# this reflects the subtract so there is no roll over
+						math.subtract_reflect(chan[slices_chan], block.back[icol][slices_back], out=chan[slices_chan])
+
 					# there is probably a better way to do the Xh stacking
 					Xhf = []
 					for x,y,tile,raw in deconvolver.hybs.tile_wise(chan[slices_chan], flat[slices_chan[1:]], **vars(args.hybs)):
@@ -262,18 +262,20 @@ def main():
 					if Xhf:
 						Xhf = cp.vstack(Xhf)
 					else:
-						Xhf = np.zeros([0,8], dtype=np.float32)
-					Xhf[:,:3] += cp.asarray([s.start for s in slices_chan])
+						Xhf = cp.zeros([0,8], dtype=cp.float32)
+					if aligner:
+						Xhf[:,:3] += cp.asarray([s.start for s in slices_chan])
 					setattr(image, f'col{icol}', Xhf)
 					executor.submit(queue.save_xfits, image, icol)
 					del Xhf, Xh, keep
-			# this block of images for a fov is over
+		                	# this block of images for a fov is over
 			if not block.add(image) or hasattr(image, 'last'):
 				# do the drift
 				if (result := drift(block, **vars(args.paths))):
 					executor.submit(drift_save, *result)
 					del result
 				# do the decoding
+				# here eventually
 				block.clear()
 				block.add(image)
 			del image
