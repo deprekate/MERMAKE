@@ -34,7 +34,7 @@ logging.basicConfig(
 def center_crop(A, shape):
 	"""Crop numpy array to (h, w) from center."""
 	h, w = shape[-2:]
-	H, W = A.shape
+	H, W = A.shape[-2:]
 	top = (H - h) // 2
 	left = (W - w) // 2
 	return A[top:top+h, left:left+w]
@@ -44,21 +44,14 @@ def load_flats(flat_field_tag, shape=None, **kwargs):
 	files = sorted(glob.glob(flat_field_tag + '*'))
 	for file in files:
 		im = np.load(file)['im']
-		assert all(a >= b for a, b in zip(im.shape, shape)), 'flat file is smaller than image'
+		assert im.shape[-1] >= shape[-1] and im.shape[-2] >= shape[-2], 'flat field smaller than image'
 		if shape is not None:
 			im = center_crop(im, shape)
 		cim = cp.array(im,dtype=cp.float32)
-		blurred = blur.box(cim, (20,20))
+		blurred = blur.box(cim, (20,20), axes=(-1,-2))
 		blurred = blurred / cp.median(blurred)
 		stack.append(blurred)
 	return cp.stack(stack)
-
-def path_parts(path):
-	path_obj = Path(path)
-	fov = path_obj.stem  # The filename without extension
-	tag = path_obj.parent.name  # The parent directory name (which you seem to want)
-	return fov, tag
-
 
 class Container:
 	def __init__(self, path_or_array):
@@ -307,29 +300,18 @@ class Block(list):
 	def __init__(self, items=None):
 		self.background = None
 	def add(self, image):
-		fov, tag = path_parts(image.path)
-		if self.fov() == fov or not self:
+		ifov = image.ifov
+		if not self or self.ifov() == ifov:
 			if self:
 				del self[-1].data
 			self.append(image)
 			return True
 		else:
 			return False
-	
-	def parts(self):
-		path = self[0].path
-		fov, tag = path_parts(path)
-		return fov, tag
-	def fov(self):
-		if not self:
-			return None
-		fov,_ = self.parts()
-		return fov
-	def tag(self):
-		_,tag = self.parts()
-		return tag
 	def iset(self):
-		return get_iset(self[0].path)
+		return self[0].iset
+	def ifov(self):
+		return self[0].ifov
 	def __repr__(self):
 		paths = [image.path for image in self]
 		return f"Block({paths})"
@@ -423,13 +405,11 @@ class ImageQueue:
 
 		container = Container(path)
 
-		fit_files = list()
 		# check if the fov has been fitted
-		fov, tag = path_parts(path)
-
 		# we should test whether the load worked!!!!!!!!!!
 		for icol in range(self.shape[0] - 1):
-			filename = self.hyb_save.format(fov=fov, tag=tag, icol=icol)
+			# this checks for the old method of using fov instead of ifov
+			filename = self.get_name(path, icol)
 			filepath = os.path.join(self.output_folder, filename)
 			# only compute if the image has not been processed or if it is background
 			if not os.path.exists(filepath) or container in self.background_files:
@@ -437,8 +417,8 @@ class ImageQueue:
 			else:
 				Xh = cp.load(filepath)['Xh']
 				setattr(container, f'col{icol}', Xh)
-		icol += 1
-		filename = self.dapi_save.format(fov=fov, tag=tag, icol=icol)
+		icol = -1
+		filename = self.get_name(path, icol)
 		filepath = os.path.join(self.output_folder, filename)
 		if not os.path.exists(filepath):
 			container[icol].compute()
@@ -447,7 +427,9 @@ class ImageQueue:
 			container.Xh_minus = cp.load(filepath)['Xh_minus']
 		# attach drift file to container
 		iset = get_iset(path)
-		filename = self.drift_save.format(fov=fov, iset=iset)
+		ifov = get_ifov(path)
+		#filename = self.drift_save.format(ifov=ifov, iset=iset)
+		filename = self.get_name(path)
 		filepath = os.path.join(self.output_folder, filename)
 		if os.path.exists(filepath):
 			drifts, files, ref, ref_path = cp.load(filepath, allow_pickle=True)
@@ -455,6 +437,8 @@ class ImageQueue:
 			container.drift_files = files
 			container.drift_ref = ref
 			container.drift_ref_path = ref_path
+		container.iset = iset
+		container.ifov = ifov
 		return container
 
 	def _worker(self):
@@ -546,35 +530,45 @@ class ImageQueue:
 		if self.thread.is_alive():
 			print("Warning: worker thread did not terminate", flush=True)
 
+	def get_name(self, path, icol=None):
+		path_obj = Path(path)
+		fov = path_obj.stem	        # the filename without extension
+		tag = path_obj.parent.name  # the parent directory name
+		ifov = get_ifov(path)
+		iset = get_iset(path)
+		if icol is None:
+			return self.drift_save.format(ifov=ifov, iset=iset)
+		elif icol == -1:
+			return self.dapi_save.format(fov=fov, tag=tag)
+		else:
+			return self.hyb_save.format(fov=fov, tag=tag, icol=icol)
+
+
 	def _is_fitted(self, path):
-		fov, tag = path_parts(path)
 		for icol in range(self.shape[0] - 1):
-			filename = self.hyb_save.format(fov=fov, tag=tag, icol=icol)
+			#filename = self.hyb_save.format(fov=fov, tag=tag, icol=icol)
+			filename = self.get_name(path, icol)
 			filepath = os.path.join(self.output_folder, filename)
 			if not os.path.exists(filepath):
 				return False
-		filename = self.dapi_save.format(fov=fov, tag=tag, icol=icol)
+		filename = self.get_name(path, -1)
 		filepath = os.path.join(self.output_folder, filename)
 		if not os.path.exists(filepath):
 			return False
 		return True
 
 	def save_xfits(self, image, icol=-1, attempt=1, max_attempts=3):
-		fov, tag = path_parts(image.path)
 		
 		# determine filename and data based on icol
 		if icol == -1:
-			filename = self.dapi_save.format(fov=fov, tag=tag)
-			data = {
-				'Xh_plus': image.Xh_plus,
-				'Xh_minus': image.Xh_minus,
-			}
+			data = {'Xh_plus': image.Xh_plus,'Xh_minus': image.Xh_minus,}
 		else:
-			filename = self.hyb_save.format(fov=fov, tag=tag, icol=icol)
 			Xh = getattr(image, f'col{icol}')
 			data = {'Xh': Xh}
 		
 		# save if file doesn't exist
+		path = image.path
+		filename = self.get_name(path, icol)
 		filepath = os.path.join(self.output_folder, filename)
 		if not os.path.exists(filepath):
 			cp.savez_compressed(filepath, version=__version__, args=self.args_array, **data)

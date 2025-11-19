@@ -150,7 +150,7 @@ def main():
 	args = parser.parse_args()
 
 	# put this here to make sure to capture the correct gpu
-	os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
+	os.environ["CUDA_VISIBLE_DEVICES"] = '1' #str(args.gpu)
 	import cupy as cp
 	#cp.cuda.Device(0).use() # The above export doesnt always work so force CuPy to use GPU 0
 	from mermake.deconvolver import Deconvolver
@@ -246,7 +246,7 @@ def main():
 					flat = flats[icol]
 
 					if aligner:
-						# this reflects the subtract so there is no roll over
+						# this reflects the subtract so there is no roll over due to datatypes
 						math.subtract_reflect(chan[slices_chan], block.back[icol][slices_back], out=chan[slices_chan])
 
 					# there is probably a better way to do the Xh stacking
@@ -268,7 +268,7 @@ def main():
 					setattr(image, f'col{icol}', Xhf)
 					executor.submit(queue.save_xfits, image, icol)
 					del Xhf, Xh, keep
-		                	# this block of images for a fov is over
+		    # this block of images for a fov is over
 			if not block.add(image) or hasattr(image, 'last'):
 				# do the drift
 				if (result := drift(block, **vars(args.paths))):

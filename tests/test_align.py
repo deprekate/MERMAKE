@@ -258,7 +258,7 @@ class TestUtilityFunctions:
 		
 		kwargs = {
 			'output_folder': '/tmp',
-			'drift_save': 'drift_fov{fov}_iset{iset}.pkl'
+			'drift_save': 'drift_fov{ifov}_iset{iset}.pkl'
 		}
 		
 		with patch('os.path.exists', return_value=True):
@@ -268,7 +268,7 @@ class TestUtilityFunctions:
 	def test_drift_function_file_not_exists(self):
 		"""Test drift function when output file doesn't exist"""
 		mock_block = MagicMock()
-		mock_block.fov.return_value = 1
+		mock_block.ifov.return_value = 1
 		mock_block.iset.return_value = 2
 		mock_block.__len__.return_value = 10
 		mock_block.__getitem__.return_value = Mock()
@@ -285,7 +285,7 @@ class TestUtilityFunctions:
 		
 		kwargs = {
 			'output_folder': '/tmp',
-			'drift_save': 'drift_fov{fov}_iset{iset}.pkl'
+			'drift_save': 'drift_fov{ifov}_iset{iset}.pkl'
 		}
 		
 		with patch('os.path.exists', return_value=False):
@@ -297,10 +297,10 @@ class TestUtilityFunctions:
 				result, filepath = drift(mock_block, **kwargs)
 				
 				# Check the structure of returned data
-				drifts, files, fov, ref_path = result
+				drifts, files, ifov, ref_path = result
 				assert len(drifts) == 5  # Number of images
 				assert len(files) == 5
-				assert fov == 1
+				assert ifov == 1
 				assert 'image_2.tif' in ref_path
 				assert filepath == '/tmp/drift_fov1_iset2.pkl'
 
