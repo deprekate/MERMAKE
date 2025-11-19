@@ -32,16 +32,12 @@ def is_valid_file(path):
 
 toml_text = """
         [paths]
-        codebook = 'codebook_code_color2__ExtraAaron_8_6_blank.csv' ###
-        psf_file = 'dic_psf_60X_cy5_Scope5.pkl'  ### Scope5 psf
-        flat_field_tag = 'Scope5_'
-        hyb_range = 'H1_AER_set1:H16_AER_set1'
-        hyb_folders = [
-                        '/data/07_22_2024__PFF_PTBP1',
-                        ]
-        output_folder = 'MERFISH_Analysis_AER'
-        redo = false
-        
+        codebook = 'codebook.csv'
+        psf_file = 'psf_file.npy'
+        flat_field_tag = 'Scope_'
+        hyb_range = 'H1_*_set1:H16_*_set2'
+        hyb_folders = ['experiment_folder']
+        output_folder = 'output'
         #---------------------------------------------------------------------------------------#
         #---------------------------------------------------------------------------------------#
         #           you probably dont have to change any of the settings below                  #
@@ -49,9 +45,10 @@ toml_text = """
         #---------------------------------------------------------------------------------------#
         hyb_save = '{fov}--{tag}--col{icol}.npz'
         dapi_save = '{fov}--{tag}--dapiFeatures.npz'
-        regex = '''([A-z]+)(\d+)_([^_]+)_set(\d+)(.*)''' #use triple quotes to avoid double escape
+		drift_save = 'drift_Conv_zscan__{ifov:0>3}--_set{iset}.pkl'
+        regex = '''([A-z]+)(\d+)_(.+)_set(\d+)(.*)''' #use triple quotes to avoid double escape
         [hybs]
-        tile_size = 300
+        tile_size = 500
         overlap = 89
         beta = 0.0001
         threshold = 3600
