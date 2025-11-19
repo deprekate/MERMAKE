@@ -408,7 +408,6 @@ class ImageQueue:
 		# check if the fov has been fitted
 		# we should test whether the load worked!!!!!!!!!!
 		for icol in range(self.shape[0] - 1):
-			# this checks for the old method of using fov instead of ifov
 			filename = self.get_name(path, icol)
 			filepath = os.path.join(self.output_folder, filename)
 			# only compute if the image has not been processed or if it is background

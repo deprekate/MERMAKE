@@ -150,7 +150,7 @@ def main():
 	args = parser.parse_args()
 
 	# put this here to make sure to capture the correct gpu
-	os.environ["CUDA_VISIBLE_DEVICES"] = '1' #str(args.gpu)
+	os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
 	import cupy as cp
 	#cp.cuda.Device(0).use() # The above export doesnt always work so force CuPy to use GPU 0
 	from mermake.deconvolver import Deconvolver

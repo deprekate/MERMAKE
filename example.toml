@@ -4,7 +4,7 @@ psf_file = 'psfs/psf_750_Scope3_final.npy'  ### Scope5 psf
 #psf_file = 'psfs/dic_psfff_scope6_60X_cy5_300pix.pkl'  ### Scope5 psf
 #psf_file = '/home/katelyn/develop/MERMAKE/psfs/dic_psf_60X_cy5_Scope5.pkl'  ### Scope5 psf
 flat_field_tag = 'flat_field/Scope3_'
-hyb_range = 'H1_BICAN_set1:H2_BICAN_set1'
+hyb_range = 'H1_BICAN_set1:H16_BICAN_set1'
 hyb_folders = ['Tominersen_Human_05_09_2025']
 output_folder = 'MERFISH_Analysis_MERMAKE'
 fov_range = '0:1'
@@ -21,7 +21,7 @@ regex = '''([A-z]+)(\d+)_(.+)_set(\d+)(.*)''' #use triple quotes to avoid double
 
 [hybs]
 tile_size = 500
-overlap = 1
+overlap = 89
 beta = 0.0001
 threshold = 3600
 blur_radius = 30
