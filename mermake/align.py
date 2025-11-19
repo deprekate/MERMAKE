@@ -159,9 +159,9 @@ def drift_save(data, filepath):
 def drift(block, **kwargs):
 	output_folder = kwargs['output_folder']
 	drift_save = kwargs['drift_save']
-	fov = block.fov()
+	ifov = block.ifov()
 	iset = block.iset()
-	filename = drift_save.format(fov=fov, iset=iset)
+	filename = drift_save.format(ifov=ifov, iset=iset)
 	filepath = os.path.join(output_folder, filename)
 	if not os.path.exists(filepath):
 		ref = block[len(block)//2]
@@ -172,6 +172,6 @@ def drift(block, **kwargs):
 			drift = dual.get_best_translation_pointsV2(image)
 			drifts.append(drift)
 			files.append(os.path.dirname(image.path))
-		return [drifts, files, fov, ref.path], filepath
+		return [drifts, files, ifov, ref.path], filepath
 		#pickle.dump([drifts, files, fov, ref.path], open(filepath,'wb'))
 
