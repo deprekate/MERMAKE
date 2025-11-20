@@ -1,8 +1,7 @@
 [paths]
 codebook = 'none' ### 
-psf_file = 'psfs/psf_750_Scope3_final.npy'  ### Scope5 psf
+psf_file = 'psfs/psf_750_Scope3_final.npy'
 #psf_file = 'psfs/dic_psfff_scope6_60X_cy5_300pix.pkl'  ### Scope5 psf
-#psf_file = '/home/katelyn/develop/MERMAKE/psfs/dic_psf_60X_cy5_Scope5.pkl'  ### Scope5 psf
 flat_field_tag = 'flat_field/Scope3_'
 hyb_range = 'H1_BICAN_set1:H16_BICAN_set1'
 hyb_folders = ['Tominersen_Human_05_09_2025']
@@ -16,7 +15,7 @@ fov_range = '0:1'
 #---------------------------------------------------------------------------------------#
 hyb_save =  '{fov}--{tag}--col{icol}__Xhfits.npz'
 dapi_save = '{fov}--{tag}--dapiFeatures.npz'
-drift_save = 'drift_Conv_zscan__{ifov:0>3}--_set{iset}.pkl'
+drift_save = 'drift_{fov}--_set{iset}.pkl'
 regex = '''([A-z]+)(\d+)_(.+)_set(\d+)(.*)''' #use triple quotes to avoid double escape
 
 [hybs]
