@@ -262,7 +262,7 @@ class TestUtilityFunctions:
 		}
 		
 		with patch('os.path.exists', return_value=True):
-			result = drift(mock_block, **kwargs)
+			result = drift(mock_block)
 			assert result is None  # Should return None if file exists
 	
 	def test_drift_function_file_not_exists(self):
@@ -271,7 +271,7 @@ class TestUtilityFunctions:
 		mock_block.ifov.return_value = 1
 		mock_block.iset.return_value = 2
 		mock_block.__len__.return_value = 10
-		mock_block.__getitem__.return_value = Mock()
+		mock_block.drift_file.return_value = '/tmp/drift_fov1_iset2.pkl'
 		
 		# Create mock images
 		mock_images = []
@@ -294,7 +294,7 @@ class TestUtilityFunctions:
 				mock_dual_class.return_value = mock_dual
 				mock_dual.get_best_translation_pointsV2.return_value = ([1, 2, 3], [1, 2, 3], [1, 2, 3], 5, 3)
 				
-				result, filepath = drift(mock_block, **kwargs)
+				result, filepath = drift(mock_block)
 				
 				# Check the structure of returned data
 				drifts, files, ifov, ref_path = result
@@ -302,7 +302,7 @@ class TestUtilityFunctions:
 				assert len(files) == 5
 				assert ifov == 1
 				assert 'image_2.tif' in ref_path
-				assert filepath == '/tmp/drift_fov1_iset2.pkl'
+				assert filepath == '/tmp/drift_fov1_iset2.pkl', filepath
 
 
 class TestErrorHandling:

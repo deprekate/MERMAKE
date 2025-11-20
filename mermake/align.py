@@ -35,6 +35,9 @@ class Aligner:
 		self.im_ref, self.Xm_ref = self.get_im_from_Xh(self.X_ref)
 
 	def get_im_from_Xh(self, Xh):
+		# it would help to be able to use a preallocated buffer here so
+		# that the imf array isnt created in ram every time, which is slow
+		#  ie  get_im_from_Xh(self, Xh, out=buffer)
 		xp = self.xp
 		resc = self.resc
 		trim = self.trim
@@ -153,16 +156,14 @@ class DualAligner:
 		return tzxyf, tzxy_plus, tzxy_minus, N_plus, N_minus
 
 def drift_save(data, filepath):
+	# maybe put this inside io.py for consistency
 	with open(filepath, 'wb') as f:
 		pickle.dump(data, f)
 
-def drift(block, **kwargs):
-	output_folder = kwargs['output_folder']
-	drift_save = kwargs['drift_save']
+def drift(block):
 	ifov = block.ifov()
 	iset = block.iset()
-	filename = drift_save.format(ifov=ifov, iset=iset)
-	filepath = os.path.join(output_folder, filename)
+	filepath = block.drift_file()
 	if not os.path.exists(filepath):
 		ref = block[len(block)//2]
 		dual = DualAligner(ref, th=4)
@@ -172,6 +173,5 @@ def drift(block, **kwargs):
 			drift = dual.get_best_translation_pointsV2(image)
 			drifts.append(drift)
 			files.append(os.path.dirname(image.path))
-		return [drifts, files, ifov, ref.path], filepath
-		#pickle.dump([drifts, files, fov, ref.path], open(filepath,'wb'))
+		return [drifts, files, ifov, ref.path] , filepath
 

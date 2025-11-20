@@ -308,6 +308,8 @@ class Block(list):
 			return True
 		else:
 			return False
+	def drift_file(self):
+		return self[0].drift_file
 	def iset(self):
 		return self[0].iset
 	def ifov(self):
@@ -430,6 +432,7 @@ class ImageQueue:
 		#filename = self.drift_save.format(ifov=ifov, iset=iset)
 		filename = self.get_name(path)
 		filepath = os.path.join(self.output_folder, filename)
+		container.drift_file = filepath
 		if os.path.exists(filepath):
 			drifts, files, ref, ref_path = cp.load(filepath, allow_pickle=True)
 			container.drifts = drifts
@@ -536,7 +539,7 @@ class ImageQueue:
 		ifov = get_ifov(path)
 		iset = get_iset(path)
 		if icol is None:
-			return self.drift_save.format(ifov=ifov, iset=iset)
+			return self.drift_save.format(ifov=ifov, fov=fov, iset=iset)
 		elif icol == -1:
 			return self.dapi_save.format(fov=fov, tag=tag)
 		else:
@@ -545,7 +548,6 @@ class ImageQueue:
 
 	def _is_fitted(self, path):
 		for icol in range(self.shape[0] - 1):
-			#filename = self.hyb_save.format(fov=fov, tag=tag, icol=icol)
 			filename = self.get_name(path, icol)
 			filepath = os.path.join(self.output_folder, filename)
 			if not os.path.exists(filepath):

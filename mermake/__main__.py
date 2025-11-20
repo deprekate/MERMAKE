@@ -100,7 +100,7 @@ def view_napari(queue, deconvolver, args ):
 		flat = flats[icol]
 		deconvolver.hybs.apply(chan, flat_field=flat, output=buffer, blur_radius=None)
 		deco = cp.asnumpy(buffer)
-		deconvolver.hybs.apply(chan, flat_field=flat, output=buffer, **vars(args.dapi))
+		deconvolver.hybs.apply(chan, flat_field=flat, output=buffer, **vars(args.hybs))
 		Xh = find_local_maxima(buffer, raw = chan, **vars(args.hybs))
 		norm = cp.asnumpy(buffer)
 		# Stack 3D images: original, deco, norm
@@ -179,7 +179,10 @@ def main():
 		# set some things based on input images
 		ncol,*chan_shape = queue.shape
 		sz,sx,sy = chan_shape
+
+		# THIS SHOULD PROBABLY BE SET TO THE ZDEPTH OF THE PSF AND NOT THE DEPTH OF THE IMAGE
 		zpad = sz - 1 # this needs to be about the same size as the input z depth
+		#zpad = 20
 		# this is a buffer to use for copying into 
 		buffer = cp.empty(chan_shape, dtype=cp.float32)	
 		chan = cp.empty(chan_shape, dtype=cp.uint16)	
@@ -268,11 +271,13 @@ def main():
 		    # this block of images for a fov is over
 			if not block.add(image) or hasattr(image, 'last'):
 				# do the drift
-				if (result := drift(block, **vars(args.paths))):
+				if result := drift(block):
 					executor.submit(drift_save, *result)
 					del result
 				# do the decoding
 				# here eventually
+
+				# now add the image to the newly cleared block
 				block.clear()
 				block.add(image)
 			del image
