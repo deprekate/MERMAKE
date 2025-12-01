@@ -89,6 +89,15 @@ delta = 5
 delta_fit = 5
 sigmaZ = 1
 sigmaXY = 1.5
+```
 
+## 🔍 If you only want to process the dapi channels a trick that you can use is
+To set the `hyb_save` toml string to not be dynamic and with different names for each fov and hyb.
+```
+hyb_save =  'Xhfits.npz'
+dapi_save = '{fov}--{tag}--dapiFeatures.npz'
+```
+What this does is trick mermake into thinking the hybs for each fov and channel has already been processed due
+to the existing Xhfits.npz file
 
 
