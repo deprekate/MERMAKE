@@ -17,11 +17,24 @@ pip install --pre cupy-cuda12x==14.0.0a1 -f https://pip.cupy.dev/pre
 
 MERMAKE relies on **CuPy** for GPU-accelerated image processing. To run MERMAKE successfully, you must have:
 
-1. An **NVIDIA GPU** with CUDA support  
-2. The **CUDA Toolkit** installed (Refer to the official CuPy installation [guide](https://docs.cupy.dev/en/stable/install.html))
+1. An **NVIDIA GPU** with CUDA support
+2. The **CUDA Toolkit** installed (Refer to the official CuPy installation <a href="https://docs.cupy.dev/en/stable/install.html" target="_blank">guide</a>)
 
+## MERMAKE pipe line
+the general steps of the MERMAKE merfish pipeline is:
+Here is a simple flow chart:
 
+```mermaid
+graph TD;
+    A["microscope"]--image capture-->B["zarr \(images\)"];
+    B["zarr \(images\)"]--fitting-->C["xfits \(local maxima\)"];
+    C["xfits \(local maxima\)"]--decoding-->D["decoded"];
+    C["xfits \(local maxima\)"]--segmentation-->S["segm"];
+    D["decoded"]---->E["final spots"];
+    S["segm"]---->E["final spots"];
+    E["final spots"]---->F["h5ad"];
 
+```
 
 ##  MERMAKE Usage
 
