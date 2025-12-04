@@ -75,11 +75,11 @@ background_range = 'H0_background_set1:H0_background_set3'
 #           you probably dont have to change any of the settings below                  #
 #---------------------------------------------------------------------------------------#
 #---------------------------------------------------------------------------------------#
-
+fov_range = '0:10'
 hyb_save =  '{fov}--{tag}--col{icol}__Xhfits.npz'
 dapi_save = '{fov}--{tag}--dapiFeatures.npz'
 drift_save = 'drift_Conv_zscan__{ifov:0>3}--_set{iset}.pkl'
-regex = '''([A-z]+)(\d+)_([^_]+)_set(\d+)(.*)''' #use triple quotes to avoid double escape
+regex = '''([A-z]+)(\d+)_(.*)_set(\d+)(.*)''' #use triple quotes to avoid double escape
 
 [hybs]
 tile_size = 500
