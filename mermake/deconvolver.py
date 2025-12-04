@@ -31,8 +31,8 @@ def laplacian_3d(shape):
 	lap[z_c, y_c - 1, x_c] = -1
 	lap[z_c, y_c + 1, x_c] = -1
 	lap[z_c, y_c, x_c - 1] = -1
-	lap[z_c, y_c, x_c - 1] = -1
-	#lap[z_c, y_c, x_c + 1] = -1  # Bug fix (previously had two -1s at the same position)
+	#lap[z_c, y_c, x_c - 1] = -1
+	lap[z_c, y_c, x_c + 1] = -1  # Bug fix (previously had two -1s at the same position)
 	return lap
 
 def batch_laplacian_fft(batch_size, shape):

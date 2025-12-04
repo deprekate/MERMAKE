@@ -5,6 +5,8 @@ import argparse
 import contextlib
 from time import sleep,time
 from typing import Generator
+import gc
+
 # Try to import the appropriate TOML library
 if sys.version_info >= (3, 11):
 	import tomllib  # Python 3.11+ standard library
@@ -38,6 +40,7 @@ toml_text = """
         hyb_range = 'H1_*_set1:H16_*_set2'
         hyb_folders = ['experiment_folder']
         output_folder = 'output'
+		background_range = 'H0_background_set1:H0_background_set2'
         #---------------------------------------------------------------------------------------#
         #---------------------------------------------------------------------------------------#
         #           you probably dont have to change any of the settings below                  #
@@ -45,7 +48,7 @@ toml_text = """
         #---------------------------------------------------------------------------------------#
         hyb_save = '{fov}--{tag}--col{icol}.npz'
         dapi_save = '{fov}--{tag}--dapiFeatures.npz'
-		drift_save = 'drift_Conv_zscan__{ifov:0>3}--_set{iset}.pkl'
+		drift_save = 'drift_{fov}--_set{iset}.pkl'
         regex = '''([A-z]+)(\d+)_(.+)_set(\d+)(.*)''' #use triple quotes to avoid double escape
         [hybs]
         tile_size = 500
@@ -124,6 +127,16 @@ def view_napari(queue, deconvolver, args ):
 	viewer.add_image(stacked, name="dapi",  colormap=color[icol], blending='additive')
 	points = cp.asnumpy(Xh_plus[:, :3])
 	viewer.add_points(points, size=11, border_color=color[icol], face_color='transparent', opacity=0.6, name=f"maxima dapi")
+	# I cant quite get everything cleared from gpu ram, needs more work
+	deconvolver.buffer = None
+	deconvolver.hybs = None
+	deconvolver.dapi = None
+	deconvolver.flats = None
+	del deconvolver, buffer, flats, image, flat, chan
+	gc.collect()  # Standard Python garbage collection
+	cp._default_memory_pool.free_all_blocks()  # Free standard GPU memory pool
+	cp._default_pinned_memory_pool.free_all_blocks()  # Free pinned memory pool
+	cp.cuda.runtime.deviceSynchronize()
 	napari.run()
 	exit()
 
